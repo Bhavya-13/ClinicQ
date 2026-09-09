@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -14,13 +15,33 @@ app.use(express.json());
 
 const PORT = 3001;
 
+// ── Simple admin PIN gate ─────────────────────────────────
+// TODO: replace with real staff accounts when multi-clinic auth is built
+const ADMIN_PIN = process.env.ADMIN_PIN || '0000'; // change this!
+
+function requireAdmin(req, res, next) {
+  const token = req.headers['x-admin-token'];
+  if (token !== 'admin-session') {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+app.post('/api/admin/login', (req, res) => {
+  const { pin } = req.body;
+  if (pin === ADMIN_PIN) {
+    return res.json({ success: true, token: 'admin-session' }); // placeholder token
+  }
+  res.status(401).json({ success: false, error: 'Incorrect PIN' });
+});
+
 function broadcast() {
   io.emit('full-queue-updated', db.getFullQueueDisplay());
   io.emit('skipped-list-updated', db.getRecentlySkipped());
   io.emit('avg-updated', db.getAvgMinutesPerPerson());
 }
 
-// ── QR Code — auto detects IP from request ───────────────────────
+// ── QR Code — auto detects IP from request ────────────────────────
 app.get('/api/qrcode', async (req, res) => {
   try {
     // req.headers.host gives us the actual host:port the request came from
@@ -34,7 +55,7 @@ app.get('/api/qrcode', async (req, res) => {
   }
 });
 
-// ── Register ──────────────────────────────────────────────────────
+// ── Register ───────────────────────────────────────────────────────
 app.post('/api/register', (req, res) => {
   const { names, numPatients } = req.body;
   if (!names || !Array.isArray(names) || names.length === 0)
@@ -49,7 +70,7 @@ app.post('/api/register', (req, res) => {
   res.json({ success: true, patient });
 });
 
-// ── Full queue ────────────────────────────────────────────────────
+// ── Full queue ───────────────────────────────────────────────────────
 app.get('/api/queue/full', (req, res) => {
   res.json({
     queue: db.getFullQueueDisplay(),
@@ -58,14 +79,14 @@ app.get('/api/queue/full', (req, res) => {
   });
 });
 
-// ── Single patient ────────────────────────────────────────────────
+// ── Single patient ───────────────────────────────────────────────────
 app.get('/api/patient/:id', (req, res) => {
   const patient = db.getPatient(parseInt(req.params.id));
   if (!patient) return res.status(404).json({ error: 'Not found' });
   res.json(patient);
 });
 
-// ── Check-in ──────────────────────────────────────────────────────
+// ── Check-in ───────────────────────────────────────────────────────
 app.post('/api/checkin/:id', (req, res) => {
   const result = db.confirmCheckin(parseInt(req.params.id));
   if (!result.success) return res.status(400).json(result);
@@ -74,7 +95,7 @@ app.post('/api/checkin/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// ── Rejoin ────────────────────────────────────────────────────────
+// ── Rejoin ───────────────────────────────────────────────────────
 app.post('/api/rejoin/:id', (req, res) => {
   const patient = db.rejoinQueue(parseInt(req.params.id));
   if (!patient) return res.status(400).json({ error: 'Cannot rejoin' });
@@ -82,10 +103,10 @@ app.post('/api/rejoin/:id', (req, res) => {
   res.json({ success: true, patient });
 });
 
-// ── Single action endpoint ────────────────────────────────────────
+// ── Single action endpoint ───────────────────────────────────────────
 let skipTimer = null;
 
-app.post('/api/admin/action', (req, res) => {
+app.post('/api/admin/action', requireAdmin, (req, res) => {
   if (skipTimer) clearTimeout(skipTimer);
 
   const currentQueue = db.getFullQueueDisplay();
@@ -138,14 +159,14 @@ app.post('/api/admin/action', (req, res) => {
   });
 });
 
-// ── Admin done (kept for safety) ──────────────────────────────────
-app.post('/api/admin/done/:id', (req, res) => {
+// ── Admin done (kept for safety) ───────────────────────────────────
+app.post('/api/admin/done/:id', requireAdmin, (req, res) => {
   db.markDone(parseInt(req.params.id));
   broadcast();
   res.json({ success: true });
 });
 
-// ── Socket ────────────────────────────────────────────────────────
+// ── Socket ───────────────────────────────────────────────────────
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
   socket.emit('full-queue-updated', db.getFullQueueDisplay());

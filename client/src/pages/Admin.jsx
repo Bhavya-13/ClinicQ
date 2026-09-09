@@ -19,6 +19,32 @@ export default function Admin() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // ── Admin PIN auth ──────────────────────────────────────────────────
+  const [pin, setPin] = useState('');
+  const [authed, setAuthed] = useState(() => sessionStorage.getItem('cq_admin_token') === 'admin-session');
+  const [pinError, setPinError] = useState('');
+
+  const handlePinSubmit = async (e) => {
+    e.preventDefault();
+    setPinError('');
+    try {
+      const res = await fetch(`${SERVER}/api/admin/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        sessionStorage.setItem('cq_admin_token', data.token);
+        setAuthed(true);
+      } else {
+        setPinError('Incorrect PIN');
+      }
+    } catch {
+      setPinError('Could not reach server');
+    }
+  };
+
   // ── Initial data fetch ──────────────────────────────────────────────
   useEffect(() => {
     fetch(`${SERVER}/api/qrcode`)
@@ -70,6 +96,7 @@ export default function Admin() {
     try {
       const res = await fetch(`${SERVER}/api/admin/action`, {
         method: 'POST',
+        headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
       });
       const data = await res.json();
       if (data.message) setMessage(data.message);
@@ -109,6 +136,29 @@ export default function Admin() {
     page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px' },
     card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)' },
   };
+
+  // ── PIN gate screen ───────────────────────────────────────────────────
+  if (!authed) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#f0f4f8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Segoe UI',sans-serif" }}>
+        <form onSubmit={handlePinSubmit} style={{ background: 'white', borderRadius: '20px', padding: '32px', width: '300px', boxShadow: '0 8px 30px rgba(0,0,0,0.1)', textAlign: 'center' }}>
+          <p style={{ fontSize: '12px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', marginBottom: '16px' }}>STAFF ACCESS</p>
+          <input
+            type="password"
+            value={pin}
+            onChange={e => setPin(e.target.value)}
+            placeholder="Enter PIN"
+            style={{ width: '100%', border: '2px solid #e8e8e8', borderRadius: '10px', padding: '12px', fontSize: '16px', textAlign: 'center', marginBottom: '12px', boxSizing: 'border-box' }}
+            autoFocus
+          />
+          {pinError && <p style={{ color: '#e74c3c', fontSize: '13px', marginBottom: '12px' }}>{pinError}</p>}
+          <button type="submit" style={{ width: '100%', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '10px', padding: '12px', fontWeight: '700', cursor: 'pointer' }}>
+            Unlock
+          </button>
+        </form>
+      </div>
+    );
+  }
 
   return (
     <div style={S.page}>

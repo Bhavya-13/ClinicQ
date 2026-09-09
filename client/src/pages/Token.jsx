@@ -106,10 +106,11 @@ export default function Token() {
     socket.on('patient-called', (called) => {
       if (called.id === parseInt(id)) {
         setPatient(prev => ({ ...prev, ...called }));
+        // Fix: derive countdown from the real server deadline instead of a hardcoded value
         const deadline = new Date(called.checkin_deadline).getTime();
         setCountdown(Math.max(0, Math.floor((deadline - Date.now()) / 1000)));
-  }
-});
+      }
+    });
     socket.on('patient-skipped', (skipped) => {
       if (skipped.id === parseInt(id)) {
         setPatient(prev => ({ ...prev, status: 'skipped' }));
@@ -247,21 +248,17 @@ export default function Token() {
           padding: '24px',
           marginBottom: '16px',
           boxShadow: '0 4px 20px rgba(0,0,0,0.07)',
-          // Subtle dotted border to make it feel like a ticket
           border: '2px dashed #e8eef5',
         }}>
 
-          {/* Top label */}
           <p style={{ textAlign: 'center', fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '4px' }}>
             Token Number
           </p>
 
-          {/* Big token number */}
           <div style={{ fontSize: '96px', fontWeight: '900', color: '#1e3a5f', lineHeight: 1, textAlign: 'center' }}>
             {patient?.token_number}
           </div>
 
-          {/* ── TIMESTAMP — subtle, part of the ticket ── */}
           {registeredAt.date && (
             <div style={{
               display: 'flex',
@@ -271,7 +268,6 @@ export default function Token() {
               marginTop: '6px',
               marginBottom: '4px',
             }}>
-              {/* Left line */}
               <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
               <div style={{ textAlign: 'center' }}>
                 <span style={{
@@ -299,12 +295,10 @@ export default function Token() {
                   {registeredAt.time}
                 </span>
               </div>
-              {/* Right line */}
               <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
             </div>
           )}
 
-          {/* Status badge */}
           <div style={{ textAlign: 'center', marginTop: '10px' }}>
             {isRejoined && (
               <span style={{ background: '#fff3e0', color: '#e67e22', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>
@@ -338,7 +332,6 @@ export default function Token() {
             )}
           </div>
 
-          {/* Divider — ticket tear line */}
           <div style={{
             margin: '16px -24px',
             borderTop: '2px dashed #f0f4f8',
@@ -348,7 +341,6 @@ export default function Token() {
             <div style={{ position: 'absolute', right: '-10px', top: '-10px', width: '20px', height: '20px', background: '#f0f4f8', borderRadius: '50%' }} />
           </div>
 
-          {/* Name section */}
           <div style={{ background: '#f7f9fc', borderRadius: '14px', padding: '16px', textAlign: 'center' }}>
             <p style={{ fontSize: '11px', color: '#bbb', fontWeight: '700', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '4px' }}>
               {patient?.num_patients === 1 ? 'Patient' : 'Registered By'}
@@ -361,7 +353,6 @@ export default function Token() {
             )}
           </div>
 
-          {/* Waiting info */}
           {isWaiting && (
             <div style={{ marginTop: '16px' }}>
               <div style={{ textAlign: 'center', marginBottom: '12px' }}>
@@ -402,7 +393,6 @@ export default function Token() {
             </div>
           )}
 
-          {/* ClinicQ brand at bottom of ticket */}
           <p style={{ textAlign: 'center', fontSize: '11px', color: '#ddd', marginTop: '20px', marginBottom: 0, letterSpacing: '2px', fontWeight: '700' }}>
             CLINIC<span style={{ color: '#2d6a9f' }}>Q</span>
           </p>
