@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import SERVER from '../config';
 
 export default function Register() {
   const [numPatients, setNumPatients] = useState(1);
@@ -19,7 +20,7 @@ export default function Register() {
     if (!name.trim()) { setError('Please enter your name.'); return; }
     setLoading(true);
     try {
-      const res = await fetch('http://192.168.1.6:3001/api/register', {
+      const res = await fetch(`${SERVER}/api/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ names: [name.trim()], numPatients }),

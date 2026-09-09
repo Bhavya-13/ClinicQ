@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
+import SERVER from '../config';
 
-const socket = io('http://`${window.location.hostname}:3001');
+const socket = io(SERVER);
 
 function formatNames(names) {
   if (!names || names.length === 0) return '';
@@ -16,7 +17,7 @@ export default function DisplayBoard() {
   const [currentTime, setCurrentTime] = useState(new Date());
 
   useEffect(() => {
-    fetch('http://`${window.location.hostname}:3001/api/queue/full')
+    fetch(`${SERVER}/api/queue/full`)
       .then(r => r.json())
       .then(data => { setFullQueue(data.queue); setSkippedList(data.skipped); });
 

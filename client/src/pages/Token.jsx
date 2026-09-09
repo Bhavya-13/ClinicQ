@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { io } from 'socket.io-client';
+import SERVER from '../config';
 
-const socket = io('http://${window.location.hostname}:3001');
+const socket = io(SERVER);
 const GRACE_SECONDS = 10;
 
 function formatNames(names) {
@@ -65,7 +66,7 @@ export default function Token() {
   const [rejoining, setRejoining] = useState(false);
 
   const fetchPatient = useCallback(() => {
-    fetch(`http://${window.location.hostname}:3001/api/patient/${id}`)
+    fetch(`${SERVER}/api/patient/${id}`)
       .then(r => r.json())
       .then(data => { setPatient(data); setLoading(false); });
   }, [id]);
@@ -79,7 +80,7 @@ export default function Token() {
     setRejoining(false);
 
     fetchPatient();
-    fetch('http://${window.location.hostname}:3001/api/queue/full')
+    fetch(`${SERVER}/api/queue/full`)
       .then(r => r.json())
       .then(data => {
         setFullQueue(data.queue);
@@ -129,14 +130,14 @@ export default function Token() {
   }, [id]);
 
   const handleCheckin = async () => {
-    const res = await fetch(`http://${window.location.hostname}:3001/api/checkin/${id}`, { method: 'POST' });
+    const res = await fetch(`${SERVER}/api/checkin/${id}`, { method: 'POST' });
     const data = await res.json();
     if (data.success) setCheckedIn(true);
   };
 
   const handleRejoin = async () => {
     setRejoining(true);
-    const res = await fetch(`http://${window.location.hostname}:3001/api/rejoin/${id}`, { method: 'POST' });
+    const res = await fetch(`${SERVER}/api/rejoin/${id}`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
       navigate(`/token/${data.patient.id}`);

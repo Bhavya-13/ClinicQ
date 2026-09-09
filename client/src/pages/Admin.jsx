@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
+import SERVER from '../config';
 
-const socket = io('http://`${window.location.hostname}:3001');
+const socket = io(SERVER);
 
 function formatNames(names) {
   if (!names || names.length === 0) return '';
@@ -18,13 +19,13 @@ export default function Admin() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // ── Initial data fetch ────────────────────────────────────────
+  // ── Initial data fetch ──────────────────────────────────────────────
   useEffect(() => {
-    fetch('http://`${window.location.hostname}:3001/api/qrcode')
+    fetch(`${SERVER}/api/qrcode`)
       .then(r => r.json())
       .then(d => setQrCode(d.qrCode));
 
-    fetch('http://`${window.location.hostname}:3001/api/queue/full')
+    fetch(`${SERVER}/api/queue/full`)
       .then(r => r.json())
       .then(data => {
         setFullQueue(data.queue);
@@ -34,7 +35,7 @@ export default function Admin() {
       });
   }, []);
 
-  // ── Socket listeners ──────────────────────────────────────────
+  // ── Socket listeners ─────────────────────────────────────────────────
   useEffect(() => {
     socket.on('full-queue-updated', (queue) => {
       setFullQueue(queue);
@@ -61,13 +62,13 @@ export default function Admin() {
     };
   }, []);
 
-  // ── Single button handler ─────────────────────────────────────
+  // ── Single button handler ────────────────────────────────────────────
   const handleAction = async () => {
     if (loading) return;
     setLoading(true);
     setMessage('');
     try {
-      const res = await fetch('http://`${window.location.hostname}:3001/api/admin/action', {
+      const res = await fetch(`${SERVER}/api/admin/action`, {
         method: 'POST',
       });
       const data = await res.json();
@@ -80,11 +81,11 @@ export default function Admin() {
     }
   };
 
-  // ── Derived state ─────────────────────────────────────────────
+  // ── Derived state ─────────────────────────────────────────────────────
   const waitingQueue = fullQueue.filter(p => p.status === 'waiting');
   const queueEmpty = waitingQueue.length === 0 && !calledPatient;
 
-  // ── Button label ──────────────────────────────────────────────
+  // ── Button label ──────────────────────────────────────────────────────
   const buttonLabel = () => {
     if (loading) return 'Please wait...';
     if (queueEmpty) return 'Queue is Empty';
@@ -325,4 +326,3 @@ export default function Admin() {
     </div>
   );
 }
-
