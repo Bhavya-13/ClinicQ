@@ -65,9 +65,16 @@ app.post('/api/register', (req, res) => {
   const n = parseInt(numPatients);
   if (!n || n < 1)
     return res.status(400).json({ error: 'Invalid number of patients' });
+
+  // Check for an existing active token under the same name today
+  const existing = db.findActivePatientByName(names[0].trim(),n);
+  if (existing) {
+    return res.json({ success: true, patient: existing, existing: true });
+  }
+
   const patient = db.registerPatient([names[0].trim()], n);
   broadcast();
-  res.json({ success: true, patient });
+  res.json({ success: true, patient, existing: false });
 });
 
 // ── Full queue ───────────────────────────────────────────────────────

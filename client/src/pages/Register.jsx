@@ -27,7 +27,7 @@ export default function Register() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      navigate(`/token/${data.patient.id}`);
+      navigate(`/token/${data.patient.id}`, { state: { existing: data.existing } });
     } catch (err) {
       setError(err.message || 'Registration failed.');
     } finally {

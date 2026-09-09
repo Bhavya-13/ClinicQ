@@ -188,6 +188,24 @@ function markDone(patientId) {
   ).run(mins, patient.num_patients);
 }
 
+function findActivePatientByName(name, numPatients) {
+  const queue = getTodayQueue();
+  const normalized = name.trim().toLowerCase();
+  const windowStart = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+  const candidates = db.prepare(
+    `SELECT * FROM patients
+     WHERE queue_id = ? AND status IN ('waiting', 'called')
+       AND created_at >= ?
+     ORDER BY created_at DESC`
+  ).all(queue.id, windowStart).map(parseNames);
+
+  return candidates.find(p =>
+    p.names[0]?.trim().toLowerCase() === normalized &&
+    p.num_patients === numPatients
+  ) || null;
+}
+
 module.exports = {
   getTodayQueue,
   registerPatient,
@@ -200,5 +218,6 @@ module.exports = {
   skipIfExpired,
   rejoinQueue,
   markDone,
+  findActivePatientByName,
   GRACE_PERIOD_SECONDS,
 };
