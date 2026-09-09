@@ -4,7 +4,6 @@ import { io } from 'socket.io-client';
 import SERVER from '../config';
 
 const socket = io(SERVER);
-const GRACE_SECONDS = 10;
 
 function formatNames(names) {
   if (!names || names.length === 0) return '';
@@ -107,9 +106,10 @@ export default function Token() {
     socket.on('patient-called', (called) => {
       if (called.id === parseInt(id)) {
         setPatient(prev => ({ ...prev, ...called }));
-        setCountdown(GRACE_SECONDS);
-      }
-    });
+        const deadline = new Date(called.checkin_deadline).getTime();
+        setCountdown(Math.max(0, Math.floor((deadline - Date.now()) / 1000)));
+  }
+});
     socket.on('patient-skipped', (skipped) => {
       if (skipped.id === parseInt(id)) {
         setPatient(prev => ({ ...prev, status: 'skipped' }));
