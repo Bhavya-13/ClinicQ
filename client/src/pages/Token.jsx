@@ -18,9 +18,6 @@ function formatCountdown(s) {
 
 function formatRegisteredAt(dateStr) {
   if (!dateStr) return { date: '', time: '' };
-
-  // SQLite datetime('now') stores UTC but without 'Z' suffix
-  // Add Z to tell JS it's UTC
   const utcStr = dateStr.includes('Z') ? dateStr : dateStr + 'Z';
   const d = new Date(utcStr);
 
@@ -49,7 +46,7 @@ function TopBar() {
 }
 
 export default function Token() {
-  const { id } = useParams();
+  const { accessToken } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
   const isExisting = location.state?.existing;
@@ -65,10 +62,10 @@ export default function Token() {
   const [rejoining, setRejoining] = useState(false);
 
   const fetchPatient = useCallback(() => {
-    fetch(`${SERVER}/api/patient/${id}`)
+    fetch(`${SERVER}/api/patient/${accessToken}`)
       .then(r => r.json())
       .then(data => { setPatient(data); setLoading(false); });
-  }, [id]);
+  }, [accessToken]);
 
   useEffect(() => {
     setPatient(null);
@@ -86,7 +83,7 @@ export default function Token() {
         setSkippedList(data.skipped);
         setAvgMins(data.avgMinsPerPerson);
       });
-  }, [id, fetchPatient]);
+  }, [accessToken, fetchPatient]);
 
   useEffect(() => {
     if (!patient?.checkin_deadline || patient.status !== 'called' || checkedIn) return;
@@ -104,21 +101,20 @@ export default function Token() {
     socket.on('skipped-list-updated', setSkippedList);
     socket.on('avg-updated', setAvgMins);
     socket.on('patient-called', (called) => {
-      if (called.id === parseInt(id)) {
+      if (patient && called.id === patient.id) {
         setPatient(prev => ({ ...prev, ...called }));
-        // Fix: derive countdown from the real server deadline instead of a hardcoded value
         const deadline = new Date(called.checkin_deadline).getTime();
         setCountdown(Math.max(0, Math.floor((deadline - Date.now()) / 1000)));
       }
     });
     socket.on('patient-skipped', (skipped) => {
-      if (skipped.id === parseInt(id)) {
+      if (patient && skipped.id === patient.id) {
         setPatient(prev => ({ ...prev, status: 'skipped' }));
         setWasSkipped(true);
       }
     });
     socket.on('checkin-confirmed', ({ patientId }) => {
-      if (patientId === parseInt(id)) setCheckedIn(true);
+      if (patient && patientId === patient.id) setCheckedIn(true);
     });
     return () => {
       socket.off('full-queue-updated');
@@ -128,27 +124,27 @@ export default function Token() {
       socket.off('patient-skipped');
       socket.off('checkin-confirmed');
     };
-  }, [id]);
+  }, [patient]);
 
   const handleCheckin = async () => {
-    const res = await fetch(`${SERVER}/api/checkin/${id}`, { method: 'POST' });
+    const res = await fetch(`${SERVER}/api/checkin/${accessToken}`, { method: 'POST' });
     const data = await res.json();
     if (data.success) setCheckedIn(true);
   };
 
   const handleRejoin = async () => {
     setRejoining(true);
-    const res = await fetch(`${SERVER}/api/rejoin/${id}`, { method: 'POST' });
+    const res = await fetch(`${SERVER}/api/rejoin/${accessToken}`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
-      navigate(`/token/${data.patient.id}`);
+      navigate(`/token/${data.patient.access_token}`);
     } else {
       setRejoining(false);
     }
   };
 
   const activeQueue = fullQueue.filter(p => p.status === 'waiting' || p.status === 'called');
-  const myIndex = activeQueue.findIndex(p => p.id === parseInt(id));
+  const myIndex = patient ? activeQueue.findIndex(p => p.id === patient.id) : -1;
 
   const peopleAhead = activeQueue
     .slice(0, myIndex)
@@ -185,13 +181,18 @@ export default function Token() {
     </div>
   );
 
+  if (!patient) return (
+    <div style={{ ...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <p style={{ color: '#bbb' }}>Token not found.</p>
+    </div>
+  );
+
   return (
     <div style={S.page}>
       <div style={{ maxWidth: '420px', margin: '0 auto' }}>
 
         <TopBar />
 
-        {/* Welcome back banner */}
         {isExisting && (
           <div style={{ background: 'linear-gradient(135deg,#0984e3,#74b9ff)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
             <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0 }}>
@@ -200,7 +201,6 @@ export default function Token() {
           </div>
         )}
 
-        {/* Called alert */}
         {isCalled && !checkedIn && (
           <div style={{ background: 'linear-gradient(135deg,#ff8c00,#ffa500)', borderRadius: '20px', padding: '24px', marginBottom: '16px', textAlign: 'center', boxShadow: '0 8px 24px rgba(255,140,0,0.4)' }}>
             <div style={{ fontSize: '28px', marginBottom: '8px' }}>🔔</div>
@@ -218,7 +218,6 @@ export default function Token() {
           </div>
         )}
 
-        {/* Checked in */}
         {isCalled && checkedIn && (
           <div style={{ background: 'linear-gradient(135deg,#00b894,#00cec9)', borderRadius: '20px', padding: '20px', marginBottom: '16px', textAlign: 'center', boxShadow: '0 8px 24px rgba(0,184,148,0.35)' }}>
             <div style={{ fontSize: '28px', marginBottom: '6px' }}>✅</div>
@@ -226,7 +225,6 @@ export default function Token() {
           </div>
         )}
 
-        {/* Skipped */}
         {isSkipped && (
           <div style={{ background: 'linear-gradient(135deg,#d63031,#e17055)', borderRadius: '20px', padding: '24px', marginBottom: '16px', textAlign: 'center', boxShadow: '0 8px 24px rgba(214,48,49,0.35)' }}>
             <div style={{ fontSize: '28px', marginBottom: '8px' }}>⏰</div>
@@ -241,7 +239,6 @@ export default function Token() {
           </div>
         )}
 
-        {/* ── TOKEN CARD ── */}
         <div style={{
           background: 'white',
           borderRadius: '20px',
@@ -260,38 +257,14 @@ export default function Token() {
           </div>
 
           {registeredAt.date && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '8px',
-              marginTop: '6px',
-              marginBottom: '4px',
-            }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '6px', marginBottom: '4px' }}>
               <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
               <div style={{ textAlign: 'center' }}>
-                <span style={{
-                  fontSize: '11px',
-                  color: '#c8d6e5',
-                  fontWeight: '600',
-                  letterSpacing: '0.5px',
-                }}>
+                <span style={{ fontSize: '11px', color: '#c8d6e5', fontWeight: '600', letterSpacing: '0.5px' }}>
                   {registeredAt.date}
                 </span>
-                <span style={{
-                  fontSize: '11px',
-                  color: '#c8d6e5',
-                  fontWeight: '600',
-                  margin: '0 6px',
-                }}>
-                  ·
-                </span>
-                <span style={{
-                  fontSize: '11px',
-                  color: '#c8d6e5',
-                  fontWeight: '600',
-                  letterSpacing: '0.5px',
-                }}>
+                <span style={{ fontSize: '11px', color: '#c8d6e5', fontWeight: '600', margin: '0 6px' }}>·</span>
+                <span style={{ fontSize: '11px', color: '#c8d6e5', fontWeight: '600', letterSpacing: '0.5px' }}>
                   {registeredAt.time}
                 </span>
               </div>
@@ -332,11 +305,7 @@ export default function Token() {
             )}
           </div>
 
-          <div style={{
-            margin: '16px -24px',
-            borderTop: '2px dashed #f0f4f8',
-            position: 'relative',
-          }}>
+          <div style={{ margin: '16px -24px', borderTop: '2px dashed #f0f4f8', position: 'relative' }}>
             <div style={{ position: 'absolute', left: '-10px', top: '-10px', width: '20px', height: '20px', background: '#f0f4f8', borderRadius: '50%' }} />
             <div style={{ position: 'absolute', right: '-10px', top: '-10px', width: '20px', height: '20px', background: '#f0f4f8', borderRadius: '50%' }} />
           </div>
@@ -398,7 +367,6 @@ export default function Token() {
           </p>
         </div>
 
-        {/* Live Queue */}
         <div style={S.card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: 0 }}>Live Queue</h2>
@@ -412,7 +380,7 @@ export default function Token() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
               {activeQueue.map((entry) => {
-                const isMe = entry.id === parseInt(id);
+                const isMe = patient && entry.id === patient.id;
                 const entryRejoined = entry.checkin_status === 'rejoined';
                 const entryCalled = entry.status === 'called';
                 const entryIndex = activeQueue.findIndex(e => e.id === entry.id);
@@ -468,7 +436,6 @@ export default function Token() {
           )}
         </div>
 
-        {/* Skipped list */}
         {skippedList.length > 0 && (
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Recently Skipped</h2>

@@ -8,7 +8,6 @@ const cors = require('cors');
 const QRCode = require('qrcode');
 const db = require('./db');
 
-// ── Global safety net — prints real errors instead of crashing silently ──
 process.on('unhandledRejection', (reason) => {
   console.error('❌ Unhandled Rejection:', reason);
 });
@@ -100,41 +99,41 @@ app.get('/api/queue/full', async (req, res) => {
   }
 });
 
-// ── Single patient ─────────────────────────────────────────
-app.get('/api/patient/:id', async (req, res) => {
+// ── Single patient — looked up by unguessable access token ──
+app.get('/api/patient/:accessToken', async (req, res) => {
   try {
-    const patient = await db.getPatient(parseInt(req.params.id));
+    const patient = await db.getPatientByAccessToken(req.params.accessToken);
     if (!patient) return res.status(404).json({ error: 'Not found' });
     res.json(patient);
   } catch (err) {
-    console.error('❌ /api/patient/:id error:', err);
+    console.error('❌ /api/patient/:accessToken error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// ── Check-in ───────────────────────────────────────────────
-app.post('/api/checkin/:id', async (req, res) => {
+// ── Check-in — by access token ──────────────────────────────
+app.post('/api/checkin/:accessToken', async (req, res) => {
   try {
-    const result = await db.confirmCheckin(parseInt(req.params.id));
+    const result = await db.confirmCheckin(req.params.accessToken);
     if (!result.success) return res.status(400).json(result);
-    io.emit('checkin-confirmed', { patientId: parseInt(req.params.id) });
+    io.emit('checkin-confirmed', { patientId: result.patientId });
     await broadcast();
     res.json({ success: true });
   } catch (err) {
-    console.error('❌ /api/checkin/:id error:', err);
+    console.error('❌ /api/checkin/:accessToken error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// ── Rejoin ─────────────────────────────────────────────────
-app.post('/api/rejoin/:id', async (req, res) => {
+// ── Rejoin — by access token ─────────────────────────────────
+app.post('/api/rejoin/:accessToken', async (req, res) => {
   try {
-    const patient = await db.rejoinQueue(parseInt(req.params.id));
+    const patient = await db.rejoinQueue(req.params.accessToken);
     if (!patient) return res.status(400).json({ error: 'Cannot rejoin' });
     await broadcast();
     res.json({ success: true, patient });
   } catch (err) {
-    console.error('❌ /api/rejoin/:id error:', err);
+    console.error('❌ /api/rejoin/:accessToken error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -1,5 +1,7 @@
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { createClient } = require('@supabase/supabase-js');
+const crypto = require('crypto');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -10,7 +12,6 @@ const GRACE_PERIOD_SECONDS = 120;
 
 function parseNames(patient) {
   if (!patient) return null;
-  // names is already JSONB (a real array) — no manual JSON.parse needed
   return patient;
 }
 
@@ -22,6 +23,41 @@ function getClinicDateKey() {
     clinicDay.setDate(clinicDay.getDate() - 1);
   }
   return clinicDay.toISOString().split('T')[0];
+}
+
+// Deletes all patient rows (and their queue rows) from previous clinic days.
+// avg_stats is a separate table with no foreign key here — completely untouched.
+async function cleanupOldPatientData() {
+  const today = getClinicDateKey();
+
+  const { data: oldQueues, error } = await supabase
+    .from('queues')
+    .select('id')
+    .neq('date', today);
+
+  if (error) throw error;
+  if (!oldQueues || oldQueues.length === 0) {
+    console.log('🧹 Cleanup check: no old queues found');
+    return;
+  }
+
+  const oldQueueIds = oldQueues.map(q => q.id);
+
+  const { error: deletePatientsError } = await supabase
+    .from('patients')
+    .delete()
+    .in('queue_id', oldQueueIds);
+
+  if (deletePatientsError) throw deletePatientsError;
+
+  const { error: deleteQueuesError } = await supabase
+    .from('queues')
+    .delete()
+    .in('id', oldQueueIds);
+
+  if (deleteQueuesError) throw deleteQueuesError;
+
+  console.log(`🧹 Cleaned up patient data from ${oldQueueIds.length} previous day(s)`);
 }
 
 async function getTodayQueue() {
@@ -36,6 +72,9 @@ async function getTodayQueue() {
   if (error) throw error;
 
   if (!queue) {
+    console.log('🆕 New day detected — running cleanup...');
+    await cleanupOldPatientData();
+
     const { data: newQueue, error: insertError } = await supabase
       .from('queues')
       .insert({ date: dateKey, current_number: 0 })
@@ -57,6 +96,8 @@ async function registerPatient(names, numPatients) {
     .update({ current_number: nextToken })
     .eq('id', queue.id);
 
+  const accessToken = crypto.randomBytes(16).toString('hex');
+
   const { data, error } = await supabase
     .from('patients')
     .insert({
@@ -64,6 +105,7 @@ async function registerPatient(names, numPatients) {
       names: names,
       num_patients: numPatients,
       token_number: nextToken,
+      access_token: accessToken,
     })
     .select()
     .single();
@@ -99,11 +141,24 @@ async function getRecentlySkipped() {
   return data.map(parseNames);
 }
 
+// Internal lookup by numeric id — used only server-side (e.g. admin actions, socket events)
 async function getPatient(id) {
   const { data, error } = await supabase
     .from('patients')
     .select('*')
     .eq('id', id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return parseNames(data);
+}
+
+// Public-facing lookup — this is what patients use via their unguessable access token
+async function getPatientByAccessToken(accessToken) {
+  const { data, error } = await supabase
+    .from('patients')
+    .select('*')
+    .eq('access_token', accessToken)
     .maybeSingle();
 
   if (error) throw error;
@@ -155,15 +210,11 @@ async function callNext() {
   return parseNames(updated);
 }
 
-async function confirmCheckin(patientId) {
-  const { data: patient, error } = await supabase
-    .from('patients')
-    .select('*')
-    .eq('id', patientId)
-    .maybeSingle();
+async function confirmCheckin(accessToken) {
+  const patient = await getPatientByAccessToken(accessToken);
 
-  if (error) throw error;
-  if (!patient || patient.status !== 'called')
+  if (!patient) return { success: false, reason: 'Not found' };
+  if (patient.status !== 'called')
     return { success: false, reason: 'Not currently called' };
   if (new Date() > new Date(patient.checkin_deadline))
     return { success: false, reason: 'Grace period expired' };
@@ -171,9 +222,9 @@ async function confirmCheckin(patientId) {
   await supabase
     .from('patients')
     .update({ checkin_status: 'confirmed' })
-    .eq('id', patientId);
+    .eq('id', patient.id);
 
-  return { success: true };
+  return { success: true, patientId: patient.id };
 }
 
 async function skipIfExpired(patientId) {
@@ -196,27 +247,24 @@ async function skipIfExpired(patientId) {
   return true;
 }
 
-async function rejoinQueue(patientId) {
+async function rejoinQueue(accessToken) {
   const queue = await getTodayQueue();
-  const { data: oldPatient, error } = await supabase
-    .from('patients')
-    .select('*')
-    .eq('id', patientId)
-    .maybeSingle();
+  const oldPatient = await getPatientByAccessToken(accessToken);
 
-  if (error) throw error;
   if (!oldPatient || oldPatient.status !== 'skipped') return null;
 
   await supabase
     .from('patients')
     .update({ status: 'done' })
-    .eq('id', patientId);
+    .eq('id', oldPatient.id);
 
   const nextToken = queue.current_number + 1;
   await supabase
     .from('queues')
     .update({ current_number: nextToken })
     .eq('id', queue.id);
+
+  const newAccessToken = crypto.randomBytes(16).toString('hex');
 
   const { data: newPatient, error: insertError } = await supabase
     .from('patients')
@@ -227,6 +275,7 @@ async function rejoinQueue(patientId) {
       token_number: nextToken,
       checkin_status: 'rejoined',
       status: 'waiting',
+      access_token: newAccessToken,
     })
     .select()
     .single();
@@ -301,6 +350,7 @@ module.exports = {
   getFullQueueDisplay,
   getRecentlySkipped,
   getPatient,
+  getPatientByAccessToken,
   getAvgMinutesPerPerson,
   callNext,
   confirmCheckin,
@@ -308,5 +358,6 @@ module.exports = {
   rejoinQueue,
   markDone,
   findActivePatientByName,
+  cleanupOldPatientData,
   GRACE_PERIOD_SECONDS,
 };
