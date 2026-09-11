@@ -50,8 +50,8 @@ async function broadcast() {
 // ── QR Code ────────────────────────────────────────────────
 app.get('/api/qrcode', async (req, res) => {
   try {
-    const host = req.headers.host.replace(':3001', ':5173');
-    const url = `http://${host}/register`;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const url = `${frontendUrl}/register`;
     const qrCode = await QRCode.toDataURL(url, { width: 300 });
     res.json({ qrCode, url });
   } catch (err) {
