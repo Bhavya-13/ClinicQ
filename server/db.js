@@ -330,8 +330,10 @@ async function markDone(patientId) {
   if (!patient.called_at) return;
 
   const mins = (now - new Date(patient.called_at)) / 1000 / 60;
+  const minsPerPerson = mins / patient.num_patients;
 
-  if (mins < 0.5 || mins > 60) return;
+  // Sanity check per-person, not on the raw group total
+  if (minsPerPerson < 0.5 || minsPerPerson > 60) return;
 
   const { data: statsRow } = await supabase
     .from('avg_stats')
@@ -371,6 +373,28 @@ async function findActivePatientByName(name, numPatients) {
   ) || null;
 }
 
+async function confirmCheckinById(patientId) {
+  const { data: patient, error } = await supabase
+    .from('patients')
+    .select('*')
+    .eq('id', patientId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!patient) return { success: false, reason: 'Not found' };
+  if (patient.status !== 'called')
+    return { success: false, reason: 'Not currently called' };
+  if (new Date() > new Date(patient.checkin_deadline))
+    return { success: false, reason: 'Grace period expired' };
+
+  await supabase
+    .from('patients')
+    .update({ checkin_status: 'confirmed' })
+    .eq('id', patientId);
+
+  return { success: true };
+}
+
 module.exports = {
   getTodayQueue,
   registerPatient,
@@ -385,6 +409,7 @@ module.exports = {
   forceSkip,
   rejoinQueue,
   markDone,
+  confirmCheckinById,
   findActivePatientByName,
   cleanupOldPatientData,
   GRACE_PERIOD_SECONDS,

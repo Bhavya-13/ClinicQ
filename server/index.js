@@ -221,6 +221,31 @@ app.post('/api/admin/skip', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Manual check-in — staff confirms presence directly (e.g. patient showed screenshot) ──
+app.post('/api/admin/checkin', requireAdmin, async (req, res) => {
+  try {
+    const currentQueue = await db.getFullQueueDisplay();
+    const calledPatient = currentQueue.find(p => p.status === 'called');
+
+    if (!calledPatient) {
+      return res.json({ success: false, message: 'No patient is currently called' });
+    }
+
+    const result = await db.confirmCheckinById(calledPatient.id);
+    if (!result.success) {
+      return res.json({ success: false, message: result.reason });
+    }
+
+    io.emit('checkin-confirmed', { patientId: calledPatient.id });
+    await broadcast();
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ /api/admin/checkin error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── Admin done ─────────────────────────────────────────────
 app.post('/api/admin/done/:id', requireAdmin, async (req, res) => {
   try {

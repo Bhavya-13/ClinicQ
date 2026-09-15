@@ -128,6 +128,25 @@ export default function Admin() {
   }
   };
 
+  const handleManualCheckin = async () => {
+  if (loading) return;
+  setLoading(true);
+  setMessage('');
+  try {
+    const res = await fetch(`${SERVER}/api/admin/checkin`, {
+      method: 'POST',
+      headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
+    });
+    const data = await res.json();
+    if (!data.success && data.message) setMessage(data.message);
+  } catch (err) {
+    setMessage('Something went wrong. Please try again.');
+    console.error(err);
+  } finally {
+    setLoading(false);
+  }
+};
+
   // ── Derived state ─────────────────────────────────────────────────────
   const waitingQueue = fullQueue.filter(p => p.status === 'waiting');
   const queueEmpty = waitingQueue.length === 0 && !calledPatient;
@@ -296,24 +315,45 @@ export default function Admin() {
 </button>
 
 {calledPatient && (
-  <button
-    onClick={handleSkip}
-    disabled={loading}
-    style={{
-      width: '100%',
-      background: 'white',
-      color: '#e74c3c',
-      border: '2px solid #ffd5d5',
-      borderRadius: '14px',
-      padding: '12px',
-      fontSize: '14px',
-      fontWeight: '700',
-      cursor: loading ? 'not-allowed' : 'pointer',
-      marginTop: '10px',
-    }}
-  >
-    Skip This Patient
-  </button>
+  <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+    {calledPatient.checkin_status !== 'confirmed' && (
+      <button
+        onClick={handleManualCheckin}
+        disabled={loading}
+        style={{
+          flex: 1,
+          background: 'white',
+          color: '#27ae60',
+          border: '2px solid #d5f5e3',
+          borderRadius: '14px',
+          padding: '12px',
+          fontSize: '14px',
+          fontWeight: '700',
+          cursor: loading ? 'not-allowed' : 'pointer',
+        }}
+      >
+        Confirm Check-In Manually
+      </button>
+    )}
+
+    <button
+      onClick={handleSkip}
+      disabled={loading}
+      style={{
+        flex: 1,
+        background: 'white',
+        color: '#e74c3c',
+        border: '2px solid #ffd5d5',
+        borderRadius: '14px',
+        padding: '12px',
+        fontSize: '14px',
+        fontWeight: '700',
+        cursor: loading ? 'not-allowed' : 'pointer',
+      }}
+    >
+      Skip This Patient
+    </button>
+  </div>
 )}
 
             {/* Next up preview */}
