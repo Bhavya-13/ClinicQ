@@ -80,7 +80,22 @@ async function getTodayQueue() {
       .insert({ date: dateKey, current_number: 0 })
       .select()
       .single();
-    if (insertError) throw insertError;
+
+    if (insertError) {
+      // Race condition: another concurrent request already created today's queue
+      // between our SELECT and this INSERT. Recover by just fetching it instead of crashing.
+      if (insertError.code === '23505') {
+        const { data: existingQueue, error: refetchError } = await supabase
+          .from('queues')
+          .select('*')
+          .eq('date', dateKey)
+          .single();
+        if (refetchError) throw refetchError;
+        return existingQueue;
+      }
+      throw insertError;
+    }
+
     queue = newQueue;
   }
 
@@ -332,6 +347,7 @@ async function findActivePatientByName(name, numPatients) {
     .select('*')
     .eq('queue_id', queue.id)
     .in('status', ['waiting', 'called'])
+    .not('access_token', 'is', null)   // ← only consider rows that actually have a valid token
     .gte('created_at', windowStart)
     .order('created_at', { ascending: false });
 
