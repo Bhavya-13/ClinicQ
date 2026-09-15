@@ -110,7 +110,7 @@ export default function Token() {
     });
     socket.on('patient-skipped', (skipped) => {
       if (patient && skipped.id === patient.id) {
-        setPatient(prev => ({ ...prev, status: 'skipped' }));
+        setPatient(prev => ({ ...prev, status: 'skipped', skip_reason: skipped.skip_reason }));
         setWasSkipped(true);
       }
     });
@@ -231,7 +231,9 @@ export default function Token() {
             <div style={{ fontSize: '28px', marginBottom: '8px' }}>⏰</div>
             <p style={{ color: 'white', fontWeight: '800', fontSize: '18px', margin: '0 0 6px' }}>You were skipped</p>
             <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', margin: '0 0 16px' }}>
-              You did not check in within the time limit.
+              {patient?.skip_reason === 'manual'
+                ? 'The clinic skipped your turn. Please rejoin the queue.'
+                : 'You did not check in within the time limit.'}
             </p>
             <button onClick={handleRejoin} disabled={rejoining}
               style={{ width: '100%', background: 'white', color: '#d63031', border: 'none', borderRadius: '12px', padding: '14px', fontSize: '15px', fontWeight: '800', cursor: rejoining ? 'not-allowed' : 'pointer', opacity: rejoining ? 0.7 : 1 }}>

@@ -76,7 +76,8 @@ export default function Admin() {
     });
 
     socket.on('auto-skip-occurred', (p) => {
-      setMessage(`Token #${p.token_number} (${formatNames(p.names)}) was auto-skipped — no-show.`);
+      const reasonText = p.skip_reason === 'manual' ? 'manually skipped by staff' : 'auto-skipped — no-show';
+      setMessage(`Token #${p.token_number} (${formatNames(p.names)}) was ${reasonText}.`);
       setCalledPatient(null);
     });
 
@@ -106,6 +107,25 @@ export default function Admin() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSkip = async () => {
+  if (loading) return;
+  setLoading(true);
+  setMessage('');
+  try {
+    const res = await fetch(`${SERVER}/api/admin/skip`, {
+      method: 'POST',
+      headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
+    });
+    const data = await res.json();
+    if (!data.success && data.message) setMessage(data.message);
+  } catch (err) {
+    setMessage('Something went wrong. Please try again.');
+    console.error(err);
+  } finally {
+    setLoading(false);
+  }
   };
 
   // ── Derived state ─────────────────────────────────────────────────────
@@ -254,26 +274,47 @@ export default function Admin() {
             )}
 
             {/* ── THE SINGLE BUTTON ── */}
-            <button
-              onClick={handleAction}
-              disabled={loading || queueEmpty}
-              style={{
-                width: '100%',
-                background: buttonBg(),
-                color: loading || queueEmpty ? '#bbb' : 'white',
-                border: 'none',
-                borderRadius: '14px',
-                padding: '16px',
-                fontSize: '16px',
-                fontWeight: '800',
-                cursor: loading || queueEmpty ? 'not-allowed' : 'pointer',
-                boxShadow: buttonShadow(),
-                transition: 'all 0.2s',
-                letterSpacing: '0.3px',
-              }}
-            >
-              {buttonLabel()}
-            </button>
+<button
+  onClick={handleAction}
+  disabled={loading || queueEmpty}
+  style={{
+    width: '100%',
+    background: buttonBg(),
+    color: loading || queueEmpty ? '#bbb' : 'white',
+    border: 'none',
+    borderRadius: '14px',
+    padding: '16px',
+    fontSize: '16px',
+    fontWeight: '800',
+    cursor: loading || queueEmpty ? 'not-allowed' : 'pointer',
+    boxShadow: buttonShadow(),
+    transition: 'all 0.2s',
+    letterSpacing: '0.3px',
+  }}
+>
+  {buttonLabel()}
+</button>
+
+{calledPatient && (
+  <button
+    onClick={handleSkip}
+    disabled={loading}
+    style={{
+      width: '100%',
+      background: 'white',
+      color: '#e74c3c',
+      border: '2px solid #ffd5d5',
+      borderRadius: '14px',
+      padding: '12px',
+      fontSize: '14px',
+      fontWeight: '700',
+      cursor: loading ? 'not-allowed' : 'pointer',
+      marginTop: '10px',
+    }}
+  >
+    Skip This Patient
+  </button>
+)}
 
             {/* Next up preview */}
             {waitingQueue.length > 0 && (

@@ -138,7 +138,7 @@ app.post('/api/rejoin/:accessToken', async (req, res) => {
   }
 });
 
-// ── Single action endpoint ────────────────────────────────
+// ── Single action endpoint — Done & Call Next ───────────────
 let skipTimer = null;
 
 app.post('/api/admin/action', requireAdmin, async (req, res) => {
@@ -162,8 +162,8 @@ app.post('/api/admin/action', requireAdmin, async (req, res) => {
         try {
           const wasSkipped = await db.skipIfExpired(next.id);
           if (wasSkipped) {
-            io.emit('patient-skipped', next);
-            io.emit('auto-skip-occurred', next);
+            io.emit('patient-skipped', { ...next, skip_reason: 'no_show' });
+            io.emit('auto-skip-occurred', { ...next, skip_reason: 'no_show' });
             await broadcast();
           }
         } catch (err) {
@@ -193,6 +193,30 @@ app.post('/api/admin/action', requireAdmin, async (req, res) => {
     });
   } catch (err) {
     console.error('❌ /api/admin/action error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Manual skip — staff-initiated, bypasses the grace period timer ──
+app.post('/api/admin/skip', requireAdmin, async (req, res) => {
+  try {
+    if (skipTimer) clearTimeout(skipTimer);
+
+    const currentQueue = await db.getFullQueueDisplay();
+    const calledPatient = currentQueue.find(p => p.status === 'called');
+
+    if (!calledPatient) {
+      return res.json({ success: false, message: 'No patient is currently called' });
+    }
+
+    await db.forceSkip(calledPatient.id);
+    io.emit('patient-skipped', { ...calledPatient, skip_reason: 'manual' });
+    io.emit('auto-skip-occurred', { ...calledPatient, skip_reason: 'manual' });
+    await broadcast();
+
+    res.json({ success: true, skipped: calledPatient });
+  } catch (err) {
+    console.error('❌ /api/admin/skip error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });

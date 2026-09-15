@@ -15,7 +15,6 @@ function parseNames(patient) {
   return patient;
 }
 
-// Clinic day resets at 4 PM
 function getClinicDateKey() {
   const now = new Date();
   const clinicDay = new Date(now);
@@ -25,8 +24,6 @@ function getClinicDateKey() {
   return clinicDay.toISOString().split('T')[0];
 }
 
-// Deletes all patient rows (and their queue rows) from previous clinic days.
-// avg_stats is a separate table with no foreign key here — completely untouched.
 async function cleanupOldPatientData() {
   const today = getClinicDateKey();
 
@@ -82,8 +79,6 @@ async function getTodayQueue() {
       .single();
 
     if (insertError) {
-      // Race condition: another concurrent request already created today's queue
-      // between our SELECT and this INSERT. Recover by just fetching it instead of crashing.
       if (insertError.code === '23505') {
         const { data: existingQueue, error: refetchError } = await supabase
           .from('queues')
@@ -156,7 +151,6 @@ async function getRecentlySkipped() {
   return data.map(parseNames);
 }
 
-// Internal lookup by numeric id — used only server-side (e.g. admin actions, socket events)
 async function getPatient(id) {
   const { data, error } = await supabase
     .from('patients')
@@ -168,7 +162,6 @@ async function getPatient(id) {
   return parseNames(data);
 }
 
-// Public-facing lookup — this is what patients use via their unguessable access token
 async function getPatientByAccessToken(accessToken) {
   const { data, error } = await supabase
     .from('patients')
@@ -256,7 +249,25 @@ async function skipIfExpired(patientId) {
 
   await supabase
     .from('patients')
-    .update({ status: 'skipped', checkin_status: 'skipped' })
+    .update({ status: 'skipped', checkin_status: 'skipped', skip_reason: 'no_show' })
+    .eq('id', patientId);
+
+  return true;
+}
+
+async function forceSkip(patientId) {
+  const { data: patient, error } = await supabase
+    .from('patients')
+    .select('*')
+    .eq('id', patientId)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!patient || patient.status !== 'called') return false;
+
+  await supabase
+    .from('patients')
+    .update({ status: 'skipped', checkin_status: 'skipped', skip_reason: 'manual' })
     .eq('id', patientId);
 
   return true;
@@ -347,7 +358,7 @@ async function findActivePatientByName(name, numPatients) {
     .select('*')
     .eq('queue_id', queue.id)
     .in('status', ['waiting', 'called'])
-    .not('access_token', 'is', null)   // ← only consider rows that actually have a valid token
+    .not('access_token', 'is', null)
     .gte('created_at', windowStart)
     .order('created_at', { ascending: false });
 
@@ -371,6 +382,7 @@ module.exports = {
   callNext,
   confirmCheckin,
   skipIfExpired,
+  forceSkip,
   rejoinQueue,
   markDone,
   findActivePatientByName,
