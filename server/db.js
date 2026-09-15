@@ -8,7 +8,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 );
 
-const GRACE_PERIOD_SECONDS = 120;
+const GRACE_PERIOD_SECONDS = 60;
 
 function parseNames(patient) {
   if (!patient) return null;

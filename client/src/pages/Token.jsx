@@ -18,8 +18,9 @@ function formatCountdown(s) {
 
 function formatRegisteredAt(dateStr) {
   if (!dateStr) return { date: '', time: '' };
-  const utcStr = dateStr.includes('Z') ? dateStr : dateStr + 'Z';
-  const d = new Date(utcStr);
+
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return { date: '', time: '' };
 
   const date = d.toLocaleDateString('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric',

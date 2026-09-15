@@ -316,7 +316,7 @@ export default function Admin() {
                         {formatNames(p.names)}
                       </p>
                       <p style={{ margin: 0, fontSize: '12px', color: '#bbb' }}>
-                        Group of {p.num_patients} · {new Date(p.created_at + (p.created_at.includes('Z') ? '' : 'Z')).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })}
+                        Group of {p.num_patients} · {new Date(p.created_at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })}
                         {p.checkin_status === 'rejoined' && (
                           <span style={{ color: '#e67e22', marginLeft: '6px' }}>· Rejoined</span>
                         )}
