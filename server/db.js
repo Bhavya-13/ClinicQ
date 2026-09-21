@@ -332,7 +332,6 @@ async function markDone(patientId) {
   const mins = (now - new Date(patient.called_at)) / 1000 / 60;
   const minsPerPerson = mins / patient.num_patients;
 
-  // Sanity check per-person, not on the raw group total
   if (minsPerPerson < 0.5 || minsPerPerson > 60) return;
 
   const { data: statsRow } = await supabase
@@ -395,6 +394,26 @@ async function confirmCheckinById(patientId) {
   return { success: true };
 }
 
+async function getQueuePausedStatus() {
+  const { data, error } = await supabase
+    .from('queue_settings')
+    .select('is_paused')
+    .eq('id', 1)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data?.is_paused || false;
+}
+
+async function setQueuePausedStatus(isPaused) {
+  const { error } = await supabase
+    .from('queue_settings')
+    .update({ is_paused: isPaused })
+    .eq('id', 1);
+
+  if (error) throw error;
+}
+
 module.exports = {
   getTodayQueue,
   registerPatient,
@@ -412,5 +431,7 @@ module.exports = {
   confirmCheckinById,
   findActivePatientByName,
   cleanupOldPatientData,
+  getQueuePausedStatus,
+  setQueuePausedStatus,
   GRACE_PERIOD_SECONDS,
 };

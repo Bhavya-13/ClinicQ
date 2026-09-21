@@ -18,6 +18,8 @@ export default function Admin() {
   const [calledPatient, setCalledPatient] = useState(null);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [pauseLoading, setPauseLoading] = useState(false);
 
   // ── Admin PIN auth ──────────────────────────────────────────────────
   const [pin, setPin] = useState('');
@@ -59,6 +61,10 @@ export default function Admin() {
         const called = data.queue.find(p => p.status === 'called');
         if (called) setCalledPatient(called);
       });
+
+    fetch(`${SERVER}/api/queue/paused`)
+      .then(r => r.json())
+      .then(d => setIsPaused(d.paused));
   }, []);
 
   // ── Socket listeners ─────────────────────────────────────────────────
@@ -81,11 +87,14 @@ export default function Admin() {
       setCalledPatient(null);
     });
 
+    socket.on('queue-paused-updated', setIsPaused);
+
     return () => {
       socket.off('full-queue-updated');
       socket.off('skipped-list-updated');
       socket.off('patient-called');
       socket.off('auto-skip-occurred');
+      socket.off('queue-paused-updated');
     };
   }, []);
 
@@ -110,42 +119,63 @@ export default function Admin() {
   };
 
   const handleSkip = async () => {
-  if (loading) return;
-  setLoading(true);
-  setMessage('');
-  try {
-    const res = await fetch(`${SERVER}/api/admin/skip`, {
-      method: 'POST',
-      headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
-    });
-    const data = await res.json();
-    if (!data.success && data.message) setMessage(data.message);
-  } catch (err) {
-    setMessage('Something went wrong. Please try again.');
-    console.error(err);
-  } finally {
-    setLoading(false);
-  }
+    if (loading) return;
+    setLoading(true);
+    setMessage('');
+    try {
+      const res = await fetch(`${SERVER}/api/admin/skip`, {
+        method: 'POST',
+        headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
+      });
+      const data = await res.json();
+      if (!data.success && data.message) setMessage(data.message);
+    } catch (err) {
+      setMessage('Something went wrong. Please try again.');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleManualCheckin = async () => {
-  if (loading) return;
-  setLoading(true);
-  setMessage('');
-  try {
-    const res = await fetch(`${SERVER}/api/admin/checkin`, {
-      method: 'POST',
-      headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
-    });
-    const data = await res.json();
-    if (!data.success && data.message) setMessage(data.message);
-  } catch (err) {
-    setMessage('Something went wrong. Please try again.');
-    console.error(err);
-  } finally {
-    setLoading(false);
-  }
-};
+    if (loading) return;
+    setLoading(true);
+    setMessage('');
+    try {
+      const res = await fetch(`${SERVER}/api/admin/checkin`, {
+        method: 'POST',
+        headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
+      });
+      const data = await res.json();
+      if (!data.success && data.message) setMessage(data.message);
+    } catch (err) {
+      setMessage('Something went wrong. Please try again.');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTogglePause = async () => {
+    if (pauseLoading) return;
+    setPauseLoading(true);
+    try {
+      const res = await fetch(`${SERVER}/api/admin/pause`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-token': sessionStorage.getItem('cq_admin_token'),
+        },
+        body: JSON.stringify({ paused: !isPaused }),
+      });
+      const data = await res.json();
+      if (data.success) setIsPaused(data.paused);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setPauseLoading(false);
+    }
+  };
 
   // ── Derived state ─────────────────────────────────────────────────────
   const waitingQueue = fullQueue.filter(p => p.status === 'waiting');
@@ -211,7 +241,7 @@ export default function Admin() {
             </p>
             <h1 style={{ fontSize: '26px', fontWeight: '900', color: '#1e3a5f', margin: 0 }}>Admin Dashboard</h1>
           </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             <span style={{ background: '#dbeafe', color: '#1e3a5f', padding: '8px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: '700' }}>
               {waitingQueue.length} Waiting
             </span>
@@ -220,8 +250,31 @@ export default function Admin() {
                 {skippedList.length} Skipped
               </span>
             )}
+            <button
+              onClick={handleTogglePause}
+              disabled={pauseLoading}
+              style={{
+                background: isPaused ? '#fef3cd' : '#f0f4f8',
+                color: isPaused ? '#d68910' : '#555',
+                border: `2px solid ${isPaused ? '#f39c12' : '#e0e0e0'}`,
+                padding: '8px 16px',
+                borderRadius: '20px',
+                fontSize: '14px',
+                fontWeight: '700',
+                cursor: pauseLoading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {isPaused ? '▶ Resume Registrations' : '⏸ Pause Registrations'}
+            </button>
           </div>
         </div>
+
+        {/* ── Paused banner ── */}
+        {isPaused && (
+          <div style={{ background: '#fff3e0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
+            <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px' }}>⏸ Registrations are currently paused. Patients cannot join the queue.</p>
+          </div>
+        )}
 
         {/* ── Notification ── */}
         {message && (
@@ -253,7 +306,6 @@ export default function Admin() {
               {calledPatient ? 'Now Serving' : 'No Patient Called'}
             </h2>
 
-            {/* Current patient info */}
             {calledPatient ? (
               <div style={{ textAlign: 'center', marginBottom: '16px' }}>
                 <div style={{ fontSize: '72px', fontWeight: '900', color: '#27ae60', lineHeight: 1, marginBottom: '8px' }}>
@@ -292,71 +344,69 @@ export default function Admin() {
               </div>
             )}
 
-            {/* ── THE SINGLE BUTTON ── */}
-<button
-  onClick={handleAction}
-  disabled={loading || queueEmpty}
-  style={{
-    width: '100%',
-    background: buttonBg(),
-    color: loading || queueEmpty ? '#bbb' : 'white',
-    border: 'none',
-    borderRadius: '14px',
-    padding: '16px',
-    fontSize: '16px',
-    fontWeight: '800',
-    cursor: loading || queueEmpty ? 'not-allowed' : 'pointer',
-    boxShadow: buttonShadow(),
-    transition: 'all 0.2s',
-    letterSpacing: '0.3px',
-  }}
->
-  {buttonLabel()}
-</button>
+            <button
+              onClick={handleAction}
+              disabled={loading || queueEmpty}
+              style={{
+                width: '100%',
+                background: buttonBg(),
+                color: loading || queueEmpty ? '#bbb' : 'white',
+                border: 'none',
+                borderRadius: '14px',
+                padding: '16px',
+                fontSize: '16px',
+                fontWeight: '800',
+                cursor: loading || queueEmpty ? 'not-allowed' : 'pointer',
+                boxShadow: buttonShadow(),
+                transition: 'all 0.2s',
+                letterSpacing: '0.3px',
+              }}
+            >
+              {buttonLabel()}
+            </button>
 
-{calledPatient && (
-  <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-    {calledPatient.checkin_status !== 'confirmed' && (
-      <button
-        onClick={handleManualCheckin}
-        disabled={loading}
-        style={{
-          flex: 1,
-          background: 'white',
-          color: '#27ae60',
-          border: '2px solid #d5f5e3',
-          borderRadius: '14px',
-          padding: '12px',
-          fontSize: '14px',
-          fontWeight: '700',
-          cursor: loading ? 'not-allowed' : 'pointer',
-        }}
-      >
-        Confirm Check-In Manually
-      </button>
-    )}
+            {calledPatient && (
+              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+                {calledPatient.checkin_status !== 'confirmed' && (
+                  <button
+                    onClick={handleManualCheckin}
+                    disabled={loading}
+                    style={{
+                      flex: 1,
+                      background: 'white',
+                      color: '#27ae60',
+                      border: '2px solid #d5f5e3',
+                      borderRadius: '14px',
+                      padding: '12px',
+                      fontSize: '14px',
+                      fontWeight: '700',
+                      cursor: loading ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Confirm Check-In Manually
+                  </button>
+                )}
 
-    <button
-      onClick={handleSkip}
-      disabled={loading}
-      style={{
-        flex: 1,
-        background: 'white',
-        color: '#e74c3c',
-        border: '2px solid #ffd5d5',
-        borderRadius: '14px',
-        padding: '12px',
-        fontSize: '14px',
-        fontWeight: '700',
-        cursor: loading ? 'not-allowed' : 'pointer',
-      }}
-    >
-      Skip This Patient
-    </button>
-  </div>
-)}
+                <button
+                  onClick={handleSkip}
+                  disabled={loading}
+                  style={{
+                    flex: 1,
+                    background: 'white',
+                    color: '#e74c3c',
+                    border: '2px solid #ffd5d5',
+                    borderRadius: '14px',
+                    padding: '12px',
+                    fontSize: '14px',
+                    fontWeight: '700',
+                    cursor: loading ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  Skip This Patient
+                </button>
+              </div>
+            )}
 
-            {/* Next up preview */}
             {waitingQueue.length > 0 && (
               <div style={{
                 marginTop: '12px', background: '#f7f9fc', borderRadius: '12px',

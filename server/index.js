@@ -62,6 +62,11 @@ app.get('/api/qrcode', async (req, res) => {
 // ── Register ───────────────────────────────────────────────
 app.post('/api/register', async (req, res) => {
   try {
+    const isPaused = await db.getQueuePausedStatus();
+    if (isPaused) {
+      return res.status(403).json({ error: 'Registration is currently paused. Please check back shortly.' });
+    }
+
     const { names, numPatients } = req.body;
     if (!names || !Array.isArray(names) || names.length === 0)
       return res.status(400).json({ error: 'Name is required' });
@@ -221,7 +226,7 @@ app.post('/api/admin/skip', requireAdmin, async (req, res) => {
   }
 });
 
-// ── Manual check-in — staff confirms presence directly (e.g. patient showed screenshot) ──
+// ── Manual check-in — staff confirms presence directly ──────
 app.post('/api/admin/checkin', requireAdmin, async (req, res) => {
   try {
     const currentQueue = await db.getFullQueueDisplay();
@@ -246,6 +251,29 @@ app.post('/api/admin/checkin', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Pause/Resume registrations ──────────────────────────────
+app.post('/api/admin/pause', requireAdmin, async (req, res) => {
+  try {
+    const { paused } = req.body;
+    await db.setQueuePausedStatus(paused);
+    io.emit('queue-paused-updated', paused);
+    res.json({ success: true, paused });
+  } catch (err) {
+    console.error('❌ /api/admin/pause error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/queue/paused', async (req, res) => {
+  try {
+    const isPaused = await db.getQueuePausedStatus();
+    res.json({ paused: isPaused });
+  } catch (err) {
+    console.error('❌ /api/queue/paused error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── Admin done ─────────────────────────────────────────────
 app.post('/api/admin/done/:id', requireAdmin, async (req, res) => {
   try {
@@ -265,6 +293,7 @@ io.on('connection', async (socket) => {
     socket.emit('full-queue-updated', await db.getFullQueueDisplay());
     socket.emit('skipped-list-updated', await db.getRecentlySkipped());
     socket.emit('avg-updated', await db.getAvgMinutesPerPerson());
+    socket.emit('queue-paused-updated', await db.getQueuePausedStatus());
   } catch (err) {
     console.error('❌ Error sending initial data to client:', err);
   }
