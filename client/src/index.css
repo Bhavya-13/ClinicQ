@@ -1,3 +1,75 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── ClinicQ responsive helpers ─────────────────────────── */
+
+html, body {
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Token page */
+@media (max-width: 380px) {
+  .cq-token-number {
+    font-size: 72px !important;
+  }
+  .cq-countdown {
+    font-size: 40px !important;
+  }
+  .cq-people-ahead-box {
+    padding: 12px 20px !important;
+  }
+  .cq-people-ahead-number {
+    font-size: 32px !important;
+  }
+}
+
+/* Register page */
+@media (max-width: 380px) {
+  .cq-register-card {
+    padding: 32px 22px !important;
+  }
+  .cq-register-icon {
+    width: 64px !important;
+    height: 64px !important;
+    font-size: 28px !important;
+  }
+}
+
+/* Display Board */
+@media (max-width: 900px) {
+  .cq-display-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+@media (max-width: 500px) {
+  .cq-display-page {
+    padding: 16px !important;
+  }
+  .cq-display-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 12px;
+  }
+  .cq-display-header-right {
+    text-align: left !important;
+  }
+}
+
+/* Admin page */
+@media (max-width: 800px) {
+  .cq-admin-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+@media (max-width: 500px) {
+  .cq-admin-page {
+    padding: 14px !important;
+  }
+  .cq-admin-header {
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 12px;
+  }
+}

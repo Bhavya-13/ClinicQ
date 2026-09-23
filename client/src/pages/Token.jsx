@@ -172,8 +172,8 @@ export default function Token() {
   const registeredAt = formatRegisteredAt(patient?.created_at);
 
   const S = {
-    page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '16px' },
-    card: { background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)' },
+    page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '16px', boxSizing: 'border-box', width: '100%', overflowX: 'hidden' },
+    card: { background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box' },
   };
 
   if (loading) return (
@@ -209,7 +209,7 @@ export default function Token() {
             <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', margin: '0 0 16px' }}>
               Confirm you are present or your token will be skipped
             </p>
-            <div style={{ fontSize: '52px', fontWeight: '900', color: 'white', marginBottom: '16px', fontVariantNumeric: 'tabular-nums' }}>
+            <div className="cq-countdown" style={{ fontSize: '52px', fontWeight: '900', color: 'white', marginBottom: '16px', fontVariantNumeric: 'tabular-nums' }}>
               {countdown !== null ? formatCountdown(countdown) : '--:--'}
             </div>
             <button onClick={handleCheckin}
@@ -249,13 +249,14 @@ export default function Token() {
           marginBottom: '16px',
           boxShadow: '0 4px 20px rgba(0,0,0,0.07)',
           border: '2px dashed #e8eef5',
+          boxSizing: 'border-box',
         }}>
 
           <p style={{ textAlign: 'center', fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '4px' }}>
             Token Number
           </p>
 
-          <div style={{ fontSize: '96px', fontWeight: '900', color: '#1e3a5f', lineHeight: 1, textAlign: 'center' }}>
+          <div className="cq-token-number" style={{ fontSize: '96px', fontWeight: '900', color: '#1e3a5f', lineHeight: 1, textAlign: 'center' }}>
             {patient?.token_number}
           </div>
 
@@ -328,9 +329,9 @@ export default function Token() {
           {isWaiting && (
             <div style={{ marginTop: '16px' }}>
               <div style={{ textAlign: 'center', marginBottom: '12px' }}>
-                <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', background: '#f0f7ff', borderRadius: '14px', padding: '16px 32px' }}>
+                <div className="cq-people-ahead-box" style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', background: '#f0f7ff', borderRadius: '14px', padding: '16px 32px' }}>
                   <p style={{ fontSize: '12px', color: '#888', margin: '0 0 4px' }}>People ahead of you</p>
-                  <p style={{ fontSize: '40px', fontWeight: '900', color: '#1e3a5f', margin: '0 0 4px' }}>{peopleAhead}</p>
+                  <p className="cq-people-ahead-number" style={{ fontSize: '40px', fontWeight: '900', color: '#1e3a5f', margin: '0 0 4px' }}>{peopleAhead}</p>
                   <p style={{ fontSize: '11px', color: '#bbb', margin: 0 }}>Updates in real-time</p>
                 </div>
               </div>

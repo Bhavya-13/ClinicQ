@@ -11,7 +11,6 @@ function formatNames(names) {
   return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
 }
 
-// Injects keyframes once into the document head
 function useGlobalStyles() {
   useEffect(() => {
     const id = 'clinicq-display-board-styles';
@@ -70,7 +69,6 @@ export default function DisplayBoard() {
   const nextPatient = waitingPatients[0];
   const hasRejoined = fullQueue.some(p => p.checkin_status === 'rejoined');
 
-  // Trigger a brief "just called" pulse whenever the served token changes
   useEffect(() => {
     if (calledPatient && calledPatient.id !== prevCalledId.current) {
       prevCalledId.current = calledPatient.id;
@@ -81,7 +79,6 @@ export default function DisplayBoard() {
     if (!calledPatient) prevCalledId.current = null;
   }, [calledPatient]);
 
-  // Grace-period progress bar (visual only — server is source of truth for actual skip)
   const [graceRemainingPct, setGraceRemainingPct] = useState(100);
   useEffect(() => {
     if (!calledPatient?.checkin_deadline || calledPatient.checkin_status === 'confirmed') {
@@ -89,7 +86,7 @@ export default function DisplayBoard() {
       return;
     }
     const deadline = new Date(calledPatient.checkin_deadline).getTime();
-    const called = calledPatient.called_at ? new Date(calledPatient.called_at + (calledPatient.called_at.includes('Z') ? '' : 'Z')).getTime() : Date.now();
+    const called = calledPatient.called_at ? new Date(calledPatient.called_at).getTime() : Date.now();
     const total = Math.max(1, deadline - called);
     const tick = () => {
       const remaining = Math.max(0, deadline - Date.now());
@@ -106,10 +103,9 @@ export default function DisplayBoard() {
   };
 
   return (
-    <div style={S.page}>
+    <div className="cq-display-page" style={S.page}>
 
-      {/* ── Header ── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '28px' }}>
+      <div className="cq-display-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '28px' }}>
         <div>
           <p style={{ fontSize: '12px', fontWeight: '800', letterSpacing: '4px', color: '#ddd', textTransform: 'uppercase', margin: '0 0 6px' }}>
             Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
@@ -120,7 +116,7 @@ export default function DisplayBoard() {
             Live Queue Status
           </p>
         </div>
-        <div style={{ textAlign: 'right' }}>
+        <div className="cq-display-header-right" style={{ textAlign: 'right' }}>
           <p style={{ fontSize: '42px', fontWeight: '800', color: '#2d6a9f', margin: '0 0 2px', fontVariantNumeric: 'tabular-nums' }}>
             {currentTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}
           </p>
@@ -130,9 +126,8 @@ export default function DisplayBoard() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.85fr', gap: '24px' }}>
+      <div className="cq-display-grid" style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.85fr', gap: '24px' }}>
 
-        {/* ── NOW SERVING ── */}
         <div>
           <p style={{ fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '3px', textTransform: 'uppercase', marginBottom: '12px' }}>
             Now Serving
@@ -176,7 +171,6 @@ export default function DisplayBoard() {
                 {calledPatient.checkin_status === 'confirmed' ? '✓ Checked In' : '⏳ Waiting for check-in'}
               </div>
 
-              {/* Grace-period progress bar (only while awaiting check-in) */}
               {calledPatient.checkin_status !== 'confirmed' && (
                 <div style={{ width: '100%', height: '8px', borderRadius: '10px', background: 'rgba(255,255,255,0.2)', overflow: 'hidden' }}>
                   <div style={{
@@ -217,7 +211,6 @@ export default function DisplayBoard() {
           )}
         </div>
 
-        {/* ── WAITING LIST ── */}
         <div>
           <p style={{ fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '3px', textTransform: 'uppercase', marginBottom: '12px' }}>
             Waiting ({waitingPatients.length})
@@ -264,7 +257,6 @@ export default function DisplayBoard() {
           </div>
         </div>
 
-        {/* ── RIGHT PANEL ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
           <div>

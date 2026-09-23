@@ -21,7 +21,6 @@ export default function Admin() {
   const [isPaused, setIsPaused] = useState(false);
   const [pauseLoading, setPauseLoading] = useState(false);
 
-  // ── Admin PIN auth ──────────────────────────────────────────────────
   const [pin, setPin] = useState('');
   const [authed, setAuthed] = useState(() => sessionStorage.getItem('cq_admin_token') === 'admin-session');
   const [pinError, setPinError] = useState('');
@@ -47,7 +46,6 @@ export default function Admin() {
     }
   };
 
-  // ── Initial data fetch ──────────────────────────────────────────────
   useEffect(() => {
     fetch(`${SERVER}/api/qrcode`)
       .then(r => r.json())
@@ -67,7 +65,6 @@ export default function Admin() {
       .then(d => setIsPaused(d.paused));
   }, []);
 
-  // ── Socket listeners ─────────────────────────────────────────────────
   useEffect(() => {
     socket.on('full-queue-updated', (queue) => {
       setFullQueue(queue);
@@ -98,7 +95,6 @@ export default function Admin() {
     };
   }, []);
 
-  // ── Single button handler ────────────────────────────────────────────
   const handleAction = async () => {
     if (loading) return;
     setLoading(true);
@@ -177,11 +173,9 @@ export default function Admin() {
     }
   };
 
-  // ── Derived state ─────────────────────────────────────────────────────
   const waitingQueue = fullQueue.filter(p => p.status === 'waiting');
   const queueEmpty = waitingQueue.length === 0 && !calledPatient;
 
-  // ── Button label ──────────────────────────────────────────────────────
   const buttonLabel = () => {
     if (loading) return 'Please wait...';
     if (queueEmpty) return 'Queue is Empty';
@@ -202,11 +196,10 @@ export default function Admin() {
   };
 
   const S = {
-    page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px' },
-    card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)' },
+    page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px', boxSizing: 'border-box' },
+    card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box' },
   };
 
-  // ── PIN gate screen ───────────────────────────────────────────────────
   if (!authed) {
     return (
       <div style={{ minHeight: '100vh', background: '#f0f4f8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Segoe UI',sans-serif" }}>
@@ -230,18 +223,17 @@ export default function Admin() {
   }
 
   return (
-    <div style={S.page}>
+    <div className="cq-admin-page" style={S.page}>
       <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
 
-        {/* ── Header ── */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+        <div className="cq-admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', textTransform: 'uppercase', margin: '0 0 4px' }}>
               Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
             </p>
             <h1 style={{ fontSize: '26px', fontWeight: '900', color: '#1e3a5f', margin: 0 }}>Admin Dashboard</h1>
           </div>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ background: '#dbeafe', color: '#1e3a5f', padding: '8px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: '700' }}>
               {waitingQueue.length} Waiting
             </span>
@@ -269,38 +261,34 @@ export default function Admin() {
           </div>
         </div>
 
-        {/* ── Paused banner ── */}
         {isPaused && (
           <div style={{ background: '#fff3e0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
             <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px' }}>⏸ Registrations are currently paused. Patients cannot join the queue.</p>
           </div>
         )}
 
-        {/* ── Notification ── */}
         {message && (
           <div style={{ background: '#fffbf0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
             <p style={{ margin: 0, color: '#d68910', fontWeight: '600', fontSize: '14px' }}>{message}</p>
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+        <div className="cq-admin-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
 
-          {/* ── QR Code ── */}
           <div style={{ ...S.card, textAlign: 'center' }}>
             <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#ddd', textTransform: 'uppercase', margin: '0 0 4px' }}>
               Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
             </p>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Scan to Join Queue</h2>
             {qrCode
-              ? <img src={qrCode} alt="QR" style={{ width: '180px', height: '180px', borderRadius: '12px' }} />
-              : <div style={{ width: '180px', height: '180px', background: '#f0f4f8', borderRadius: '12px', margin: '0 auto' }} />
+              ? <img src={qrCode} alt="QR" style={{ width: '180px', height: '180px', borderRadius: '12px', maxWidth: '100%' }} />
+              : <div style={{ width: '180px', height: '180px', background: '#f0f4f8', borderRadius: '12px', margin: '0 auto', maxWidth: '100%' }} />
             }
             <p style={{ fontSize: '12px', color: '#bbb', marginTop: '12px', marginBottom: 0 }}>
               Display at clinic entrance
             </p>
           </div>
 
-          {/* ── Current Patient + Button ── */}
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>
               {calledPatient ? 'Now Serving' : 'No Patient Called'}
@@ -366,13 +354,13 @@ export default function Admin() {
             </button>
 
             {calledPatient && (
-              <div style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+              <div style={{ display: 'flex', gap: '10px', marginTop: '10px', flexWrap: 'wrap' }}>
                 {calledPatient.checkin_status !== 'confirmed' && (
                   <button
                     onClick={handleManualCheckin}
                     disabled={loading}
                     style={{
-                      flex: 1,
+                      flex: '1 1 140px',
                       background: 'white',
                       color: '#27ae60',
                       border: '2px solid #d5f5e3',
@@ -391,7 +379,7 @@ export default function Admin() {
                   onClick={handleSkip}
                   disabled={loading}
                   style={{
-                    flex: 1,
+                    flex: '1 1 140px',
                     background: 'white',
                     color: '#e74c3c',
                     border: '2px solid #ffd5d5',
@@ -410,7 +398,7 @@ export default function Admin() {
             {waitingQueue.length > 0 && (
               <div style={{
                 marginTop: '12px', background: '#f7f9fc', borderRadius: '12px',
-                padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px',
               }}>
                 <span style={{ fontSize: '12px', color: '#aaa' }}>Next up</span>
                 <span style={{ fontSize: '13px', fontWeight: '700', color: '#1e3a5f' }}>
@@ -421,7 +409,6 @@ export default function Admin() {
           </div>
         </div>
 
-        {/* ── Waiting Queue ── */}
         <div style={{ ...S.card, marginBottom: '20px' }}>
           <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Waiting Queue</h2>
           {waitingQueue.length === 0 ? (
@@ -431,7 +418,7 @@ export default function Admin() {
               {waitingQueue.map((p, i) => (
                 <div key={p.id} style={{
                   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '14px 18px', borderRadius: '14px',
+                  padding: '14px 18px', borderRadius: '14px', flexWrap: 'wrap', gap: '10px',
                   background: i === 0 ? '#f0f7ff' : p.checkin_status === 'rejoined' ? '#fff8f0' : '#f9f9f9',
                   border: `2px solid ${i === 0 ? '#2d6a9f' : p.checkin_status === 'rejoined' ? '#e67e22' : '#efefef'}`,
                 }}>
@@ -465,14 +452,13 @@ export default function Admin() {
           )}
         </div>
 
-        {/* ── Skipped ── */}
         {skippedList.length > 0 && (
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Skipped (No-shows)</h2>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {skippedList.map(p => (
                 <div key={p.id} style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px',
                   padding: '14px 18px', borderRadius: '14px',
                   background: '#fff5f5', border: '1.5px solid #ffd5d5',
                 }}>
@@ -498,7 +484,6 @@ export default function Admin() {
           </div>
         )}
 
-        {/* ── Footer ── */}
         <p style={{ textAlign: 'center', fontSize: '11px', color: '#ccc', marginTop: '32px', letterSpacing: '3px', fontWeight: '700' }}>
           CLINIC<span style={{ color: '#2d6a9f' }}>Q</span>
         </p>

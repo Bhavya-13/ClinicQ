@@ -47,9 +47,9 @@ export default function Register() {
       fontFamily: "'Segoe UI',sans-serif",
       position: 'relative',
       overflow: 'hidden',
+      boxSizing: 'border-box',
     }}>
 
-      {/* Subtle decorative background accents */}
       <div style={{
         position: 'absolute', top: '-120px', right: '-120px',
         width: '320px', height: '320px', borderRadius: '50%',
@@ -61,14 +61,13 @@ export default function Register() {
         background: 'radial-gradient(circle, rgba(30,58,95,0.06) 0%, transparent 70%)',
       }} />
 
-      {/* Top brand mark */}
       <div style={{ marginBottom: '28px', textAlign: 'center', position: 'relative', zIndex: 1 }}>
         <span style={{ fontSize: '13px', fontWeight: '800', letterSpacing: '4px', textTransform: 'uppercase', color: '#bbb' }}>
           Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
         </span>
       </div>
 
-      <div style={{
+      <div className="cq-register-card" style={{
         background: 'white',
         borderRadius: '28px',
         padding: '44px 36px',
@@ -77,11 +76,11 @@ export default function Register() {
         boxShadow: '0 20px 50px rgba(30,58,95,0.12), 0 2px 8px rgba(30,58,95,0.06)',
         position: 'relative',
         zIndex: 1,
+        boxSizing: 'border-box',
       }}>
 
-        {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-          <div style={{
+          <div className="cq-register-icon" style={{
             width: '76px', height: '76px',
             background: 'linear-gradient(150deg,#1e3a5f 0%,#2d6a9f 100%)',
             borderRadius: '22px',
@@ -102,7 +101,6 @@ export default function Register() {
 
         <form onSubmit={handleSubmit}>
 
-          {/* Name field */}
           <div style={{ marginBottom: '22px' }}>
             <label style={{
               display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472',
@@ -110,32 +108,29 @@ export default function Register() {
             }}>
               Your Name
             </label>
-            <div style={{ position: 'relative' }}>
-              <input
-                type="text"
-                value={name}
-                onChange={e => setName(e.target.value)}
-                placeholder="e.g. Priya Sharma"
-                required
-                style={{
-                  width: '100%',
-                  border: '2px solid #eef1f5',
-                  background: '#fbfcfe',
-                  borderRadius: '14px',
-                  padding: '15px 16px',
-                  fontSize: '15.5px',
-                  color: '#1a1a2e',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                  transition: 'border-color 0.2s, background 0.2s',
-                }}
-                onFocus={e => { e.target.style.borderColor = '#2d6a9f'; e.target.style.background = '#ffffff'; }}
-                onBlur={e => { e.target.style.borderColor = '#eef1f5'; e.target.style.background = '#fbfcfe'; }}
-              />
-            </div>
+            <input
+              type="text"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="e.g. Priya Sharma"
+              required
+              style={{
+                width: '100%',
+                border: '2px solid #eef1f5',
+                background: '#fbfcfe',
+                borderRadius: '14px',
+                padding: '15px 16px',
+                fontSize: '15.5px',
+                color: '#1a1a2e',
+                outline: 'none',
+                boxSizing: 'border-box',
+                transition: 'border-color 0.2s, background 0.2s',
+              }}
+              onFocus={e => { e.target.style.borderColor = '#2d6a9f'; e.target.style.background = '#ffffff'; }}
+              onBlur={e => { e.target.style.borderColor = '#eef1f5'; e.target.style.background = '#fbfcfe'; }}
+            />
           </div>
 
-          {/* People stepper */}
           <div style={{ marginBottom: '26px' }}>
             <label style={{
               display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472',
@@ -187,7 +182,6 @@ export default function Register() {
             </div>
           </div>
 
-          {/* Live summary chip */}
           {name.trim() && (
             <div style={{
               background: 'linear-gradient(135deg,#f0f7ff,#e8f2ff)',
@@ -207,7 +201,6 @@ export default function Register() {
             </div>
           )}
 
-          {/* Error */}
           {error && (
             <div style={{
               background: '#fff0f0', border: '1.5px solid #ffcccc', borderRadius: '14px',
@@ -218,7 +211,6 @@ export default function Register() {
             </div>
           )}
 
-          {/* Submit */}
           <button type="submit" disabled={loading}
             style={{
               width: '100%',
@@ -241,7 +233,6 @@ export default function Register() {
           </button>
         </form>
 
-        {/* Footer trust line */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '26px' }}>
           <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#c3e9d8' }} />
           <p style={{ fontSize: '11.5px', color: '#c3cbd4', margin: 0, letterSpacing: '0.3px' }}>
