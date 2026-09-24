@@ -24,13 +24,24 @@ if (!ADMIN_PIN || !SESSION_SECRET) {
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
+
+// Only our own frontend may call this backend.
+// Locally this is localhost:5173; on Render it's set to the Vercel URL.
+const FRONTEND_ORIGIN = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+
+const io = new Server(server, { cors: { origin: FRONTEND_ORIGIN } });
 
 app.set('trust proxy', 1); // correct client IPs when hosted behind a proxy (Render)
-app.use(cors());
+app.use(cors({
+  origin(origin, callback) {
+    // Allow requests with no origin (browser address bar, health checks) and our frontend
+    callback(null, !origin || origin === FRONTEND_ORIGIN);
+  },
+}));
 app.use(express.json());
 
-const PORT = 3001;
+// Render provides the port; 3001 is the local fallback
+const PORT = process.env.PORT || 3001;
 
 // ── Admin authentication ───────────────────────────────────
 const SESSION_HOURS = 12;
