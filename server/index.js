@@ -3,6 +3,7 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const express = require('express');
 const http = require('http');
+const crypto = require('crypto');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const QRCode = require('qrcode');
@@ -12,32 +13,102 @@ process.on('unhandledRejection', (reason) => {
   console.error('❌ Unhandled Rejection:', reason);
 });
 
+// ── Required secrets — refuse to start without them ────────
+const ADMIN_PIN = process.env.ADMIN_PIN;
+const SESSION_SECRET = process.env.ADMIN_SESSION_SECRET;
+
+if (!ADMIN_PIN || !SESSION_SECRET) {
+  console.error('❌ ADMIN_PIN and ADMIN_SESSION_SECRET must be set in server/.env');
+  process.exit(1);
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
+app.set('trust proxy', 1); // correct client IPs when hosted behind a proxy (Render)
 app.use(cors());
 app.use(express.json());
 
 const PORT = 3001;
 
-// ── Simple admin PIN gate ─────────────────────────────────
-const ADMIN_PIN = process.env.ADMIN_PIN || '0000';
+// ── Admin authentication ───────────────────────────────────
+const SESSION_HOURS = 12;
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_MINUTES = 5;
+const loginAttempts = new Map(); // ip -> { count, lockedUntil }
+
+// Signature depends on the PIN too, so changing the PIN logs out all sessions
+function sign(payload) {
+  return crypto
+    .createHmac('sha256', `${SESSION_SECRET}:${ADMIN_PIN}`)
+    .update(payload)
+    .digest('hex');
+}
+
+function createAdminToken() {
+  const expiresAt = String(Date.now() + SESSION_HOURS * 60 * 60 * 1000);
+  return `${expiresAt}.${sign(expiresAt)}`;
+}
+
+function verifyAdminToken(token) {
+  if (typeof token !== 'string') return false;
+  const [expiresAt, signature] = token.split('.');
+  if (!expiresAt || !signature) return false;
+
+  const given = Buffer.from(signature, 'hex');
+  const expected = Buffer.from(sign(expiresAt), 'hex');
+  if (given.length !== expected.length) return false;
+  if (!crypto.timingSafeEqual(given, expected)) return false;
+
+  return Number(expiresAt) > Date.now();
+}
+
+// Constant-time PIN comparison (prevents timing attacks)
+function pinMatches(input) {
+  const a = crypto.createHash('sha256').update(String(input)).digest();
+  const b = crypto.createHash('sha256').update(String(ADMIN_PIN)).digest();
+  return crypto.timingSafeEqual(a, b);
+}
 
 function requireAdmin(req, res, next) {
-  const token = req.headers['x-admin-token'];
-  if (token !== 'admin-session') {
+  if (!verifyAdminToken(req.headers['x-admin-token'])) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   next();
 }
 
 app.post('/api/admin/login', (req, res) => {
-  const { pin } = req.body;
-  if (pin === ADMIN_PIN) {
-    return res.json({ success: true, token: 'admin-session' });
+  const ip = req.ip;
+  const record = loginAttempts.get(ip) || { count: 0, lockedUntil: 0 };
+
+  if (record.lockedUntil > Date.now()) {
+    const minsLeft = Math.ceil((record.lockedUntil - Date.now()) / 60000);
+    return res.status(429).json({
+      success: false,
+      error: `Too many wrong attempts. Try again in ${minsLeft} min.`,
+    });
   }
+
+  const { pin } = req.body || {};
+  if (typeof pin === 'string' && pinMatches(pin)) {
+    loginAttempts.delete(ip);
+    return res.json({ success: true, token: createAdminToken() });
+  }
+
+  record.count += 1;
+  if (record.count >= MAX_LOGIN_ATTEMPTS) {
+    record.lockedUntil = Date.now() + LOCKOUT_MINUTES * 60 * 1000;
+    record.count = 0;
+  }
+  loginAttempts.set(ip, record);
+
   res.status(401).json({ success: false, error: 'Incorrect PIN' });
+});
+
+// Lets the Admin page check whether its saved token is still valid
+app.get('/api/admin/verify', requireAdmin, (req, res) => {
+  res.json({ valid: true });
 });
 
 async function broadcast() {
@@ -202,7 +273,7 @@ app.post('/api/admin/action', requireAdmin, async (req, res) => {
   }
 });
 
-// ── Manual skip — staff-initiated, bypasses the grace period timer ──
+// ── Manual skip ────────────────────────────────────────────
 app.post('/api/admin/skip', requireAdmin, async (req, res) => {
   try {
     if (skipTimer) clearTimeout(skipTimer);
@@ -226,7 +297,7 @@ app.post('/api/admin/skip', requireAdmin, async (req, res) => {
   }
 });
 
-// ── Manual check-in — staff confirms presence directly ──────
+// ── Manual check-in ────────────────────────────────────────
 app.post('/api/admin/checkin', requireAdmin, async (req, res) => {
   try {
     const currentQueue = await db.getFullQueueDisplay();
@@ -254,7 +325,7 @@ app.post('/api/admin/checkin', requireAdmin, async (req, res) => {
 // ── Pause/Resume registrations ──────────────────────────────
 app.post('/api/admin/pause', requireAdmin, async (req, res) => {
   try {
-    const { paused } = req.body;
+    const paused = req.body?.paused === true;
     await db.setQueuePausedStatus(paused);
     io.emit('queue-paused-updated', paused);
     res.json({ success: true, paused });

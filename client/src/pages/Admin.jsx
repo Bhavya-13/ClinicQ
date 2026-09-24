@@ -21,9 +21,50 @@ export default function Admin() {
   const [isPaused, setIsPaused] = useState(false);
   const [pauseLoading, setPauseLoading] = useState(false);
 
+  // ── Admin auth ──────────────────────────────────────────────────────
   const [pin, setPin] = useState('');
-  const [authed, setAuthed] = useState(() => sessionStorage.getItem('cq_admin_token') === 'admin-session');
+  const [authed, setAuthed] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
   const [pinError, setPinError] = useState('');
+
+  // On load, ask the server whether the saved token is still valid
+  useEffect(() => {
+    const token = sessionStorage.getItem('cq_admin_token');
+    if (!token) {
+      setCheckingAuth(false);
+      return;
+    }
+    fetch(`${SERVER}/api/admin/verify`, { headers: { 'x-admin-token': token } })
+      .then(r => {
+        if (r.ok) setAuthed(true);
+        else sessionStorage.removeItem('cq_admin_token');
+      })
+      .catch(() => {})
+      .finally(() => setCheckingAuth(false));
+  }, []);
+
+  const lockDashboard = (reason = '') => {
+    sessionStorage.removeItem('cq_admin_token');
+    setAuthed(false);
+    setPin('');
+    setPinError(reason);
+  };
+
+  // Every admin request goes through this — returns null if the session is invalid
+  const adminFetch = async (path, options = {}) => {
+    const res = await fetch(`${SERVER}${path}`, {
+      ...options,
+      headers: {
+        ...(options.headers || {}),
+        'x-admin-token': sessionStorage.getItem('cq_admin_token') || '',
+      },
+    });
+    if (res.status === 401) {
+      lockDashboard('Session expired. Please enter the PIN again.');
+      return null;
+    }
+    return res;
+  };
 
   const handlePinSubmit = async (e) => {
     e.preventDefault();
@@ -37,15 +78,17 @@ export default function Admin() {
       const data = await res.json();
       if (data.success) {
         sessionStorage.setItem('cq_admin_token', data.token);
+        setPin('');
         setAuthed(true);
       } else {
-        setPinError('Incorrect PIN');
+        setPinError(data.error || 'Incorrect PIN');
       }
     } catch {
       setPinError('Could not reach server');
     }
   };
 
+  // ── Initial data fetch ──────────────────────────────────────────────
   useEffect(() => {
     fetch(`${SERVER}/api/qrcode`)
       .then(r => r.json())
@@ -65,6 +108,7 @@ export default function Admin() {
       .then(d => setIsPaused(d.paused));
   }, []);
 
+  // ── Socket listeners ─────────────────────────────────────────────────
   useEffect(() => {
     socket.on('full-queue-updated', (queue) => {
       setFullQueue(queue);
@@ -95,15 +139,14 @@ export default function Admin() {
     };
   }, []);
 
+  // ── Action handlers ──────────────────────────────────────────────────
   const handleAction = async () => {
     if (loading) return;
     setLoading(true);
     setMessage('');
     try {
-      const res = await fetch(`${SERVER}/api/admin/action`, {
-        method: 'POST',
-        headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
-      });
+      const res = await adminFetch('/api/admin/action', { method: 'POST' });
+      if (!res) return;
       const data = await res.json();
       if (data.message) setMessage(data.message);
     } catch (err) {
@@ -119,10 +162,8 @@ export default function Admin() {
     setLoading(true);
     setMessage('');
     try {
-      const res = await fetch(`${SERVER}/api/admin/skip`, {
-        method: 'POST',
-        headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
-      });
+      const res = await adminFetch('/api/admin/skip', { method: 'POST' });
+      if (!res) return;
       const data = await res.json();
       if (!data.success && data.message) setMessage(data.message);
     } catch (err) {
@@ -138,10 +179,8 @@ export default function Admin() {
     setLoading(true);
     setMessage('');
     try {
-      const res = await fetch(`${SERVER}/api/admin/checkin`, {
-        method: 'POST',
-        headers: { 'x-admin-token': sessionStorage.getItem('cq_admin_token') },
-      });
+      const res = await adminFetch('/api/admin/checkin', { method: 'POST' });
+      if (!res) return;
       const data = await res.json();
       if (!data.success && data.message) setMessage(data.message);
     } catch (err) {
@@ -156,14 +195,12 @@ export default function Admin() {
     if (pauseLoading) return;
     setPauseLoading(true);
     try {
-      const res = await fetch(`${SERVER}/api/admin/pause`, {
+      const res = await adminFetch('/api/admin/pause', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': sessionStorage.getItem('cq_admin_token'),
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ paused: !isPaused }),
       });
+      if (!res) return;
       const data = await res.json();
       if (data.success) setIsPaused(data.paused);
     } catch (err) {
@@ -173,6 +210,7 @@ export default function Admin() {
     }
   };
 
+  // ── Derived state ─────────────────────────────────────────────────────
   const waitingQueue = fullQueue.filter(p => p.status === 'waiting');
   const queueEmpty = waitingQueue.length === 0 && !calledPatient;
 
@@ -200,13 +238,24 @@ export default function Admin() {
     card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box' },
   };
 
-  if (!authed) {
+  // ── Checking saved session ────────────────────────────────────────────
+  if (checkingAuth) {
     return (
       <div style={{ minHeight: '100vh', background: '#f0f4f8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Segoe UI',sans-serif" }}>
-        <form onSubmit={handlePinSubmit} style={{ background: 'white', borderRadius: '20px', padding: '32px', width: '300px', boxShadow: '0 8px 30px rgba(0,0,0,0.1)', textAlign: 'center' }}>
+        <p style={{ color: '#bbb' }}>Checking access...</p>
+      </div>
+    );
+  }
+
+  // ── PIN gate screen ───────────────────────────────────────────────────
+  if (!authed) {
+    return (
+      <div style={{ minHeight: '100vh', background: '#f0f4f8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Segoe UI',sans-serif", padding: '16px', boxSizing: 'border-box' }}>
+        <form onSubmit={handlePinSubmit} style={{ background: 'white', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '320px', boxShadow: '0 8px 30px rgba(0,0,0,0.1)', textAlign: 'center', boxSizing: 'border-box' }}>
           <p style={{ fontSize: '12px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', marginBottom: '16px' }}>STAFF ACCESS</p>
           <input
             type="password"
+            inputMode="numeric"
             value={pin}
             onChange={e => setPin(e.target.value)}
             placeholder="Enter PIN"
@@ -226,6 +275,7 @@ export default function Admin() {
     <div className="cq-admin-page" style={S.page}>
       <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
 
+        {/* ── Header ── */}
         <div className="cq-admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', textTransform: 'uppercase', margin: '0 0 4px' }}>
@@ -258,15 +308,32 @@ export default function Admin() {
             >
               {isPaused ? '▶ Resume Registrations' : '⏸ Pause Registrations'}
             </button>
+            <button
+              onClick={() => lockDashboard()}
+              style={{
+                background: 'white',
+                color: '#888',
+                border: '2px solid #e0e0e0',
+                padding: '8px 16px',
+                borderRadius: '20px',
+                fontSize: '14px',
+                fontWeight: '700',
+                cursor: 'pointer',
+              }}
+            >
+              🔒 Lock
+            </button>
           </div>
         </div>
 
+        {/* ── Paused banner ── */}
         {isPaused && (
           <div style={{ background: '#fff3e0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
             <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px' }}>⏸ Registrations are currently paused. Patients cannot join the queue.</p>
           </div>
         )}
 
+        {/* ── Notification ── */}
         {message && (
           <div style={{ background: '#fffbf0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
             <p style={{ margin: 0, color: '#d68910', fontWeight: '600', fontSize: '14px' }}>{message}</p>
@@ -275,6 +342,7 @@ export default function Admin() {
 
         <div className="cq-admin-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
 
+          {/* ── QR Code ── */}
           <div style={{ ...S.card, textAlign: 'center' }}>
             <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#ddd', textTransform: 'uppercase', margin: '0 0 4px' }}>
               Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
@@ -289,6 +357,7 @@ export default function Admin() {
             </p>
           </div>
 
+          {/* ── Current Patient + Buttons ── */}
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>
               {calledPatient ? 'Now Serving' : 'No Patient Called'}
@@ -409,6 +478,7 @@ export default function Admin() {
           </div>
         </div>
 
+        {/* ── Waiting Queue ── */}
         <div style={{ ...S.card, marginBottom: '20px' }}>
           <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Waiting Queue</h2>
           {waitingQueue.length === 0 ? (
@@ -452,6 +522,7 @@ export default function Admin() {
           )}
         </div>
 
+        {/* ── Skipped ── */}
         {skippedList.length > 0 && (
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Skipped (No-shows)</h2>
