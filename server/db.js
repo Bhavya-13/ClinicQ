@@ -15,13 +15,21 @@ function parseNames(patient) {
   return patient;
 }
 
+// Clinic day is calculated in IST, regardless of the server's timezone.
+// IST = UTC+5:30 and has no daylight saving, so a fixed offset is safe.
+const CLINIC_UTC_OFFSET_MINUTES = 330;
+const DAY_RESET_HOUR = 16; // 4 PM IST — later this becomes a per-clinic setting
+
 function getClinicDateKey() {
-  const now = new Date();
-  const clinicDay = new Date(now);
-  if (now.getHours() < 16) {
-    clinicDay.setDate(clinicDay.getDate() - 1);
+  // Shift "now" into IST, then read it with UTC getters so the server's
+  // own timezone (UTC on most hosting) has no effect.
+  const nowInClinicTime = new Date(Date.now() + CLINIC_UTC_OFFSET_MINUTES * 60 * 1000);
+
+  if (nowInClinicTime.getUTCHours() < DAY_RESET_HOUR) {
+    nowInClinicTime.setUTCDate(nowInClinicTime.getUTCDate() - 1);
   }
-  return clinicDay.toISOString().split('T')[0];
+
+  return nowInClinicTime.toISOString().split('T')[0];
 }
 
 async function cleanupOldPatientData() {
