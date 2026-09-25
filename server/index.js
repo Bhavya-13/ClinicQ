@@ -175,8 +175,16 @@ clinicRouter.use(async (req, res, next) => {
   try {
     const slug = String(req.params.slug || DEFAULT_CLINIC_SLUG).toLowerCase();
     const clinic = await db.getClinicBySlug(slug);
-    if (!clinic || !clinic.is_active) {
+    if (!clinic) {
       return res.status(404).json({ error: 'Clinic not found' });
+    }
+    if (!clinic.is_active) {
+      // 410 Gone: the clinic exists but has been turned off by the owner
+      return res.status(410).json({
+        error: 'This clinic is no longer accepting online tokens',
+        inactive: true,
+        name: clinic.name,
+      });
     }
     req.clinic = clinic;
     req.isLegacyRoute = !req.params.slug;
