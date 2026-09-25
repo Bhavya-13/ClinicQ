@@ -10,41 +10,102 @@ const supabase = createClient(
 
 const GRACE_PERIOD_SECONDS = 60;
 
-function parseNames(patient) {
-  if (!patient) return null;
-  return patient;
+// Clinic days are calculated in IST regardless of the server's timezone.
+// IST = UTC+5:30 with no daylight saving, so a fixed offset is safe.
+const CLINIC_UTC_OFFSET_MINUTES = 330;
+
+// Everything that may be shown publicly about a patient.
+// access_token is deliberately NOT included — it's the patient's private key.
+const PUBLIC_PATIENT_FIELDS =
+  'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at';
+
+const CLINIC_ADMIN_FIELDS =
+  'id, slug, name, day_reset_hour, is_active, is_paused, created_at';
+
+function newAccessToken() {
+  return crypto.randomBytes(16).toString('hex');
 }
 
-// Clinic day is calculated in IST, regardless of the server's timezone.
-// IST = UTC+5:30 and has no daylight saving, so a fixed offset is safe.
-const CLINIC_UTC_OFFSET_MINUTES = 330;
-const DAY_RESET_HOUR = 16; // 4 PM IST — later this becomes a per-clinic setting
+// ── Clinics ───────────────────────────────────────────────
 
-function getClinicDateKey() {
-  // Shift "now" into IST, then read it with UTC getters so the server's
-  // own timezone (UTC on most hosting) has no effect.
+async function getClinicBySlug(slug) {
+  const { data, error } = await supabase
+    .from('clinics')
+    .select('*')
+    .eq('slug', slug)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function getClinicById(id) {
+  const { data, error } = await supabase
+    .from('clinics')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function listClinics() {
+  const { data, error } = await supabase
+    .from('clinics')
+    .select(CLINIC_ADMIN_FIELDS)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+async function createClinic({ slug, name, pinHash, dayResetHour }) {
+  const { data, error } = await supabase
+    .from('clinics')
+    .insert({ slug, name, pin_hash: pinHash, day_reset_hour: dayResetHour })
+    .select(CLINIC_ADMIN_FIELDS)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function updateClinic(id, updates) {
+  const { data, error } = await supabase
+    .from('clinics')
+    .update(updates)
+    .eq('id', id)
+    .select(CLINIC_ADMIN_FIELDS)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function setQueuePausedStatus(clinicId, isPaused) {
+  const { error } = await supabase
+    .from('clinics')
+    .update({ is_paused: isPaused })
+    .eq('id', clinicId);
+  if (error) throw error;
+}
+
+// ── Clinic day + daily queue ──────────────────────────────
+
+function getClinicDateKey(dayResetHour) {
   const nowInClinicTime = new Date(Date.now() + CLINIC_UTC_OFFSET_MINUTES * 60 * 1000);
-
-  if (nowInClinicTime.getUTCHours() < DAY_RESET_HOUR) {
+  if (nowInClinicTime.getUTCHours() < dayResetHour) {
     nowInClinicTime.setUTCDate(nowInClinicTime.getUTCDate() - 1);
   }
-
   return nowInClinicTime.toISOString().split('T')[0];
 }
 
-async function cleanupOldPatientData() {
-  const today = getClinicDateKey();
-
+// Deletes this clinic's patients/queues from previous days. Other clinics are untouched.
+async function cleanupOldPatientData(clinicId, todayKey) {
   const { data: oldQueues, error } = await supabase
     .from('queues')
     .select('id')
-    .neq('date', today);
+    .eq('clinic_id', clinicId)
+    .neq('date', todayKey);
 
   if (error) throw error;
-  if (!oldQueues || oldQueues.length === 0) {
-    console.log('🧹 Cleanup check: no old queues found');
-    return;
-  }
+  if (!oldQueues || oldQueues.length === 0) return;
 
   const oldQueueIds = oldQueues.map(q => q.id);
 
@@ -52,158 +113,143 @@ async function cleanupOldPatientData() {
     .from('patients')
     .delete()
     .in('queue_id', oldQueueIds);
-
   if (deletePatientsError) throw deletePatientsError;
 
   const { error: deleteQueuesError } = await supabase
     .from('queues')
     .delete()
     .in('id', oldQueueIds);
-
   if (deleteQueuesError) throw deleteQueuesError;
 
-  console.log(`🧹 Cleaned up patient data from ${oldQueueIds.length} previous day(s)`);
+  console.log(`🧹 Clinic ${clinicId}: cleaned up ${oldQueueIds.length} previous day(s)`);
 }
 
-async function getTodayQueue() {
-  const dateKey = getClinicDateKey();
+async function getTodayQueue(clinic) {
+  const dateKey = getClinicDateKey(clinic.day_reset_hour);
 
-  let { data: queue, error } = await supabase
+  const { data: queue, error } = await supabase
     .from('queues')
     .select('*')
+    .eq('clinic_id', clinic.id)
     .eq('date', dateKey)
     .maybeSingle();
-
   if (error) throw error;
+  if (queue) return queue;
 
-  if (!queue) {
-    console.log('🆕 New day detected — running cleanup...');
-    await cleanupOldPatientData();
+  await cleanupOldPatientData(clinic.id, dateKey);
 
-    const { data: newQueue, error: insertError } = await supabase
-      .from('queues')
-      .insert({ date: dateKey, current_number: 0 })
-      .select()
-      .single();
+  const { data: newQueue, error: insertError } = await supabase
+    .from('queues')
+    .insert({ clinic_id: clinic.id, date: dateKey, current_number: 0 })
+    .select()
+    .single();
 
-    if (insertError) {
-      if (insertError.code === '23505') {
-        const { data: existingQueue, error: refetchError } = await supabase
-          .from('queues')
-          .select('*')
-          .eq('date', dateKey)
-          .single();
-        if (refetchError) throw refetchError;
-        return existingQueue;
-      }
-      throw insertError;
+  if (insertError) {
+    // Another request created today's queue a moment earlier — use that one
+    if (insertError.code === '23505') {
+      const { data: existing, error: refetchError } = await supabase
+        .from('queues')
+        .select('*')
+        .eq('clinic_id', clinic.id)
+        .eq('date', dateKey)
+        .single();
+      if (refetchError) throw refetchError;
+      return existing;
     }
-
-    queue = newQueue;
+    throw insertError;
   }
 
-  return queue;
+  return newQueue;
 }
 
-async function registerPatient(names, numPatients) {
-  const queue = await getTodayQueue();
-  const nextToken = queue.current_number + 1;
+// Atomic in the database, so two simultaneous registrations never get the same number
+async function takeNextTokenNumber(queueId) {
+  const { data, error } = await supabase.rpc('next_token_number', { p_queue_id: queueId });
+  if (error) throw error;
+  return data;
+}
 
-  await supabase
-    .from('queues')
-    .update({ current_number: nextToken })
-    .eq('id', queue.id);
+// ── Patients ──────────────────────────────────────────────
 
-  const accessToken = crypto.randomBytes(16).toString('hex');
+async function registerPatient(clinic, names, numPatients) {
+  const queue = await getTodayQueue(clinic);
+  const tokenNumber = await takeNextTokenNumber(queue.id);
 
   const { data, error } = await supabase
     .from('patients')
     .insert({
+      clinic_id: clinic.id,
       queue_id: queue.id,
-      names: names,
+      names,
       num_patients: numPatients,
-      token_number: nextToken,
-      access_token: accessToken,
+      token_number: tokenNumber,
+      access_token: newAccessToken(),
     })
-    .select()
+    .select('*') // includes access_token — only ever sent to the patient who registered
     .single();
 
   if (error) throw error;
-  return parseNames(data);
+  return data;
 }
 
-async function getFullQueueDisplay() {
-  const queue = await getTodayQueue();
+async function getFullQueueDisplay(clinic) {
+  const queue = await getTodayQueue(clinic);
   const { data, error } = await supabase
     .from('patients')
-    .select('*')
+    .select(PUBLIC_PATIENT_FIELDS)
     .eq('queue_id', queue.id)
-    .not('status', 'eq', 'done')
+    .neq('status', 'done')
     .order('token_number', { ascending: true });
-
   if (error) throw error;
-  return data.map(parseNames);
+  return data;
 }
 
-async function getRecentlySkipped() {
-  const queue = await getTodayQueue();
+async function getRecentlySkipped(clinic) {
+  const queue = await getTodayQueue(clinic);
   const { data, error } = await supabase
     .from('patients')
-    .select('*')
+    .select(PUBLIC_PATIENT_FIELDS)
     .eq('queue_id', queue.id)
     .eq('status', 'skipped')
     .order('token_number', { ascending: false })
     .limit(5);
-
   if (error) throw error;
-  return data.map(parseNames);
+  return data;
 }
 
-async function getPatient(id) {
+// The patient's own record, found by their private link. Scoped to the clinic.
+async function getPatientByAccessToken(clinicId, accessToken) {
   const { data, error } = await supabase
     .from('patients')
     .select('*')
-    .eq('id', id)
-    .maybeSingle();
-
-  if (error) throw error;
-  return parseNames(data);
-}
-
-async function getPatientByAccessToken(accessToken) {
-  const { data, error } = await supabase
-    .from('patients')
-    .select('*')
+    .eq('clinic_id', clinicId)
     .eq('access_token', accessToken)
     .maybeSingle();
-
   if (error) throw error;
-  return parseNames(data);
+  return data;
 }
 
-async function getAvgMinutesPerPerson() {
+async function getAvgMinutesPerPerson(clinicId) {
   const { data, error } = await supabase
-    .from('avg_stats')
-    .select('*')
-    .eq('id', 1)
+    .from('clinics')
+    .select('avg_total_minutes, avg_total_people')
+    .eq('id', clinicId)
     .maybeSingle();
-
   if (error) throw error;
-  if (!data || data.total_people === 0) return null;
-  return Math.round((data.total_minutes / data.total_people) * 10) / 10;
+  if (!data || data.avg_total_people <= 0) return null;
+  return Math.round((data.avg_total_minutes / data.avg_total_people) * 10) / 10;
 }
 
-async function callNext() {
-  const queue = await getTodayQueue();
+async function callNext(clinic) {
+  const queue = await getTodayQueue(clinic);
   const { data: next, error } = await supabase
     .from('patients')
-    .select('*')
+    .select('id')
     .eq('queue_id', queue.id)
     .eq('status', 'waiting')
     .order('token_number', { ascending: true })
     .limit(1)
     .maybeSingle();
-
   if (error) throw error;
   if (!next) return null;
 
@@ -219,146 +265,157 @@ async function callNext() {
       checkin_status: 'pending',
     })
     .eq('id', next.id)
-    .select()
-    .single();
+    .eq('status', 'waiting')
+    .select(PUBLIC_PATIENT_FIELDS)
+    .maybeSingle();
 
   if (updateError) throw updateError;
-  return parseNames(updated);
+  return updated;
 }
 
-async function confirmCheckin(accessToken) {
-  const patient = await getPatientByAccessToken(accessToken);
-
+async function checkInPatient(patient) {
   if (!patient) return { success: false, reason: 'Not found' };
-  if (patient.status !== 'called')
-    return { success: false, reason: 'Not currently called' };
+  if (patient.status !== 'called') return { success: false, reason: 'Not currently called' };
   if (new Date() > new Date(patient.checkin_deadline))
     return { success: false, reason: 'Grace period expired' };
 
-  await supabase
+  const { data, error } = await supabase
     .from('patients')
     .update({ checkin_status: 'confirmed' })
-    .eq('id', patient.id);
+    .eq('id', patient.id)
+    .eq('status', 'called')
+    .select('id')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return { success: false, reason: 'Not currently called' };
 
   return { success: true, patientId: patient.id };
 }
 
-async function skipIfExpired(patientId) {
-  const { data: patient, error } = await supabase
-    .from('patients')
-    .select('*')
-    .eq('id', patientId)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!patient || patient.status !== 'called') return false;
-  if (patient.checkin_status === 'confirmed') return false;
-  if (new Date() <= new Date(patient.checkin_deadline)) return false;
-
-  await supabase
-    .from('patients')
-    .update({ status: 'skipped', checkin_status: 'skipped', skip_reason: 'no_show' })
-    .eq('id', patientId);
-
-  return true;
+async function confirmCheckin(clinicId, accessToken) {
+  return checkInPatient(await getPatientByAccessToken(clinicId, accessToken));
 }
 
-async function forceSkip(patientId) {
+async function confirmCheckinById(clinicId, patientId) {
   const { data: patient, error } = await supabase
     .from('patients')
-    .select('*')
+    .select(PUBLIC_PATIENT_FIELDS)
+    .eq('clinic_id', clinicId)
     .eq('id', patientId)
     .maybeSingle();
-
   if (error) throw error;
-  if (!patient || patient.status !== 'called') return false;
+  return checkInPatient(patient);
+}
 
-  await supabase
+// Staff skip. Returns the skipped patient (public fields), or null.
+async function forceSkip(clinicId, patientId) {
+  const { data, error } = await supabase
     .from('patients')
     .update({ status: 'skipped', checkin_status: 'skipped', skip_reason: 'manual' })
-    .eq('id', patientId);
-
-  return true;
+    .eq('clinic_id', clinicId)
+    .eq('id', patientId)
+    .eq('status', 'called')
+    .select(PUBLIC_PATIENT_FIELDS)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
-async function rejoinQueue(accessToken) {
-  const queue = await getTodayQueue();
-  const oldPatient = await getPatientByAccessToken(accessToken);
+// Auto-skip every called patient (in any clinic) whose check-in time has run out.
+// One atomic update, so it's safe even if two servers run it at once.
+async function sweepExpiredCheckins() {
+  const { data, error } = await supabase
+    .from('patients')
+    .update({ status: 'skipped', checkin_status: 'skipped', skip_reason: 'no_show' })
+    .eq('status', 'called')
+    .eq('checkin_status', 'pending')
+    .lt('checkin_deadline', new Date().toISOString())
+    .select(PUBLIC_PATIENT_FIELDS);
+  if (error) throw error;
+  return data || [];
+}
 
+async function rejoinQueue(clinic, accessToken) {
+  const oldPatient = await getPatientByAccessToken(clinic.id, accessToken);
   if (!oldPatient || oldPatient.status !== 'skipped') return null;
 
-  await supabase
+  // Claim the old entry first, so double-tapping "Rejoin" can't create two new tokens
+  const { data: claimed, error: claimError } = await supabase
     .from('patients')
     .update({ status: 'done' })
-    .eq('id', oldPatient.id);
+    .eq('id', oldPatient.id)
+    .eq('status', 'skipped')
+    .select('id')
+    .maybeSingle();
+  if (claimError) throw claimError;
+  if (!claimed) return null;
 
-  const nextToken = queue.current_number + 1;
-  await supabase
-    .from('queues')
-    .update({ current_number: nextToken })
-    .eq('id', queue.id);
-
-  const newAccessToken = crypto.randomBytes(16).toString('hex');
+  const queue = await getTodayQueue(clinic);
+  const tokenNumber = await takeNextTokenNumber(queue.id);
 
   const { data: newPatient, error: insertError } = await supabase
     .from('patients')
     .insert({
+      clinic_id: clinic.id,
       queue_id: queue.id,
       names: oldPatient.names,
       num_patients: oldPatient.num_patients,
-      token_number: nextToken,
+      token_number: tokenNumber,
       checkin_status: 'rejoined',
       status: 'waiting',
-      access_token: newAccessToken,
+      access_token: newAccessToken(),
     })
-    .select()
+    .select('*')
     .single();
 
   if (insertError) throw insertError;
-  return parseNames(newPatient);
+  return newPatient;
 }
 
-async function markDone(patientId) {
+async function markDone(clinicId, patientId) {
   const { data: patient, error } = await supabase
     .from('patients')
-    .select('*')
+    .select(PUBLIC_PATIENT_FIELDS)
+    .eq('clinic_id', clinicId)
     .eq('id', patientId)
     .maybeSingle();
-
   if (error) throw error;
-  if (!patient) return;
+  if (!patient || patient.status === 'done') return;
 
   const now = new Date();
-
-  await supabase
+  const { error: updateError } = await supabase
     .from('patients')
     .update({ status: 'done', done_at: now.toISOString() })
     .eq('id', patientId);
+  if (updateError) throw updateError;
 
   if (!patient.called_at) return;
 
   const mins = (now - new Date(patient.called_at)) / 1000 / 60;
   const minsPerPerson = mins / patient.num_patients;
 
+  // Sanity check per person, not on the raw group total
   if (minsPerPerson < 0.5 || minsPerPerson > 60) return;
 
-  const { data: statsRow } = await supabase
-    .from('avg_stats')
-    .select('*')
-    .eq('id', 1)
+  const { data: stats, error: statsError } = await supabase
+    .from('clinics')
+    .select('avg_total_minutes, avg_total_people')
+    .eq('id', clinicId)
     .single();
+  if (statsError) throw statsError;
 
-  await supabase
-    .from('avg_stats')
+  const { error: avgError } = await supabase
+    .from('clinics')
     .update({
-      total_minutes: statsRow.total_minutes + mins,
-      total_people: statsRow.total_people + patient.num_patients,
+      avg_total_minutes: stats.avg_total_minutes + mins,
+      avg_total_people: stats.avg_total_people + patient.num_patients,
     })
-    .eq('id', 1);
+    .eq('id', clinicId);
+  if (avgError) throw avgError;
 }
 
-async function findActivePatientByName(name, numPatients) {
-  const queue = await getTodayQueue();
+async function findActivePatientByName(clinic, name, numPatients) {
+  const queue = await getTodayQueue(clinic);
   const normalized = name.trim().toLowerCase();
   const windowStart = new Date(Date.now() - 2 * 60 * 1000).toISOString();
 
@@ -370,76 +427,34 @@ async function findActivePatientByName(name, numPatients) {
     .not('access_token', 'is', null)
     .gte('created_at', windowStart)
     .order('created_at', { ascending: false });
-
   if (error) throw error;
 
-  const candidates = data.map(parseNames);
-  return candidates.find(p =>
-    p.names[0]?.trim().toLowerCase() === normalized &&
+  return data.find(p =>
+    p.names?.[0]?.trim().toLowerCase() === normalized &&
     p.num_patients === numPatients
   ) || null;
 }
 
-async function confirmCheckinById(patientId) {
-  const { data: patient, error } = await supabase
-    .from('patients')
-    .select('*')
-    .eq('id', patientId)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!patient) return { success: false, reason: 'Not found' };
-  if (patient.status !== 'called')
-    return { success: false, reason: 'Not currently called' };
-  if (new Date() > new Date(patient.checkin_deadline))
-    return { success: false, reason: 'Grace period expired' };
-
-  await supabase
-    .from('patients')
-    .update({ checkin_status: 'confirmed' })
-    .eq('id', patientId);
-
-  return { success: true };
-}
-
-async function getQueuePausedStatus() {
-  const { data, error } = await supabase
-    .from('queue_settings')
-    .select('is_paused')
-    .eq('id', 1)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data?.is_paused || false;
-}
-
-async function setQueuePausedStatus(isPaused) {
-  const { error } = await supabase
-    .from('queue_settings')
-    .update({ is_paused: isPaused })
-    .eq('id', 1);
-
-  if (error) throw error;
-}
-
 module.exports = {
+  GRACE_PERIOD_SECONDS,
+  getClinicBySlug,
+  getClinicById,
+  listClinics,
+  createClinic,
+  updateClinic,
+  setQueuePausedStatus,
   getTodayQueue,
   registerPatient,
   getFullQueueDisplay,
   getRecentlySkipped,
-  getPatient,
   getPatientByAccessToken,
   getAvgMinutesPerPerson,
   callNext,
   confirmCheckin,
-  skipIfExpired,
+  confirmCheckinById,
   forceSkip,
+  sweepExpiredCheckins,
   rejoinQueue,
   markDone,
-  confirmCheckinById,
   findActivePatientByName,
-  cleanupOldPatientData,
-  getQueuePausedStatus,
-  setQueuePausedStatus,
-  GRACE_PERIOD_SECONDS,
 };
