@@ -1,8 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { io } from 'socket.io-client';
-import SERVER from '../config';
-
-const socket = io(SERVER);
+import { useClinic } from '../clinic';
 
 function formatNames(names) {
   if (!names || names.length === 0) return '';
@@ -41,6 +38,7 @@ function useGlobalStyles() {
 
 export default function DisplayBoard() {
   useGlobalStyles();
+  const { clinic, api, socket } = useClinic();
 
   const [fullQueue, setFullQueue] = useState([]);
   const [skippedList, setSkippedList] = useState([]);
@@ -49,20 +47,21 @@ export default function DisplayBoard() {
   const [justCalled, setJustCalled] = useState(false);
 
   useEffect(() => {
-    fetch(`${SERVER}/api/queue/full`)
+    fetch(`${api}/queue/full`)
       .then(r => r.json())
-      .then(data => { setFullQueue(data.queue); setSkippedList(data.skipped); });
+      .then(data => { setFullQueue(data.queue || []); setSkippedList(data.skipped || []); })
+      .catch(() => {});
 
     socket.on('full-queue-updated', setFullQueue);
     socket.on('skipped-list-updated', setSkippedList);
     const clock = setInterval(() => setCurrentTime(new Date()), 1000);
 
     return () => {
-      socket.off('full-queue-updated');
-      socket.off('skipped-list-updated');
+      socket.off('full-queue-updated', setFullQueue);
+      socket.off('skipped-list-updated', setSkippedList);
       clearInterval(clock);
     };
-  }, []);
+  }, [api, socket]);
 
   const calledPatient = fullQueue.find(p => p.status === 'called');
   const waitingPatients = fullQueue.filter(p => p.status === 'waiting');
@@ -100,6 +99,7 @@ export default function DisplayBoard() {
   const S = {
     page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI', sans-serif", padding: '32px 40px', boxSizing: 'border-box' },
     card: { background: 'white', borderRadius: '20px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)' },
+    label: { fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '3px', textTransform: 'uppercase', marginBottom: '12px' },
   };
 
   return (
@@ -110,7 +110,7 @@ export default function DisplayBoard() {
           <p style={{ fontSize: '12px', fontWeight: '800', letterSpacing: '4px', color: '#ddd', textTransform: 'uppercase', margin: '0 0 6px' }}>
             Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
           </p>
-          <h1 style={{ fontSize: '36px', fontWeight: '900', color: '#1e3a5f', margin: '0 0 4px', letterSpacing: '-0.5px' }}>City Clinic</h1>
+          <h1 style={{ fontSize: '36px', fontWeight: '900', color: '#1e3a5f', margin: '0 0 4px', letterSpacing: '-0.5px' }}>{clinic.name}</h1>
           <p style={{ color: '#aaa', fontSize: '14px', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00b894', display: 'inline-block' }} />
             Live Queue Status
@@ -118,55 +118,41 @@ export default function DisplayBoard() {
         </div>
         <div className="cq-display-header-right" style={{ textAlign: 'right' }}>
           <p style={{ fontSize: '42px', fontWeight: '800', color: '#2d6a9f', margin: '0 0 2px', fontVariantNumeric: 'tabular-nums' }}>
-            {currentTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })}
+            {currentTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' })}
           </p>
           <p style={{ color: '#bbb', fontSize: '14px', margin: 0 }}>
-            {currentTime.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
+            {currentTime.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })}
           </p>
         </div>
       </div>
 
       <div className="cq-display-grid" style={{ display: 'grid', gridTemplateColumns: '1.3fr 1fr 0.85fr', gap: '24px' }}>
 
+        {/* ── Now serving ── */}
         <div>
-          <p style={{ fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '3px', textTransform: 'uppercase', marginBottom: '12px' }}>
-            Now Serving
-          </p>
+          <p style={S.label}>Now Serving</p>
 
           {calledPatient ? (
             <div
               className={justCalled ? 'cq-now-serving' : ''}
-              style={{
-                background: 'linear-gradient(150deg, #1e3a5f 0%, #2d6a9f 100%)',
-                borderRadius: '24px',
-                padding: '40px 28px',
-                textAlign: 'center',
-                boxShadow: '0 20px 50px rgba(30,58,95,0.35)',
-              }}
+              style={{ background: 'linear-gradient(150deg, #1e3a5f 0%, #2d6a9f 100%)', borderRadius: '24px', padding: '40px 28px', textAlign: 'center', boxShadow: '0 20px 50px rgba(30,58,95,0.35)' }}
             >
-              <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '12px', margin: '0 0 8px', letterSpacing: '3px', textTransform: 'uppercase', fontWeight: '700' }}>
-                Token
-              </p>
+              <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '12px', margin: '0 0 8px', letterSpacing: '3px', textTransform: 'uppercase', fontWeight: '700' }}>Token</p>
               <div style={{ fontSize: '130px', fontWeight: '900', lineHeight: 1, color: 'white' }}>
                 {calledPatient.token_number}
                 {calledPatient.checkin_status === 'rejoined' && (
                   <span style={{ fontSize: '52px', color: 'rgba(255,255,255,0.55)', verticalAlign: 'super' }}>R</span>
                 )}
               </div>
-              <p style={{ fontSize: '26px', fontWeight: '700', color: 'white', margin: '14px 0 4px' }}>
-                {formatNames(calledPatient.names)}
-              </p>
+              <p style={{ fontSize: '26px', fontWeight: '700', color: 'white', margin: '14px 0 4px' }}>{formatNames(calledPatient.names)}</p>
               {calledPatient.num_patients > 1 && (
-                <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '14px', margin: '0 0 18px' }}>
-                  Group of {calledPatient.num_patients}
-                </p>
+                <p style={{ color: 'rgba(255,255,255,0.65)', fontSize: '14px', margin: '0 0 18px' }}>Group of {calledPatient.num_patients}</p>
               )}
 
               <div style={{
-                display: 'inline-flex', alignItems: 'center', gap: '8px',
-                padding: '8px 20px', borderRadius: '20px', fontSize: '13px', fontWeight: '700',
+                display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '8px 20px', borderRadius: '20px',
+                fontSize: '13px', fontWeight: '700', color: 'white', marginBottom: '16px',
                 background: calledPatient.checkin_status === 'confirmed' ? 'rgba(255,255,255,0.22)' : 'rgba(255,205,50,0.28)',
-                color: 'white', marginBottom: '16px',
               }}>
                 {calledPatient.checkin_status === 'confirmed' ? '✓ Checked In' : '⏳ Waiting for check-in'}
               </div>
@@ -174,10 +160,8 @@ export default function DisplayBoard() {
               {calledPatient.checkin_status !== 'confirmed' && (
                 <div style={{ width: '100%', height: '8px', borderRadius: '10px', background: 'rgba(255,255,255,0.2)', overflow: 'hidden' }}>
                   <div style={{
-                    height: '100%',
-                    width: `${graceRemainingPct}%`,
+                    height: '100%', width: `${graceRemainingPct}%`, borderRadius: '10px',
                     background: graceRemainingPct < 25 ? '#ff8a8a' : 'rgba(255,255,255,0.85)',
-                    borderRadius: '10px',
                     transition: 'width 0.5s linear, background 0.3s ease',
                   }} />
                 </div>
@@ -192,29 +176,22 @@ export default function DisplayBoard() {
 
           {nextPatient && (
             <div style={{ marginTop: '16px', ...S.card, padding: '20px', textAlign: 'center' }}>
-              <p style={{ color: '#aaa', fontSize: '11px', letterSpacing: '2px', textTransform: 'uppercase', margin: '0 0 8px', fontWeight: '700' }}>
-                Up Next
-              </p>
+              <p style={{ color: '#aaa', fontSize: '11px', letterSpacing: '2px', textTransform: 'uppercase', margin: '0 0 8px', fontWeight: '700' }}>Up Next</p>
               <p style={{ fontSize: '40px', fontWeight: '900', color: '#e67e22', margin: '0 0 4px' }}>
                 #{nextPatient.token_number}
                 {nextPatient.checkin_status === 'rejoined' && <span style={{ fontSize: '20px', color: '#e67e22' }}>R</span>}
               </p>
-              <p style={{ color: '#444', fontSize: '17px', margin: 0, fontWeight: '600' }}>
-                {formatNames(nextPatient.names)}
-              </p>
+              <p style={{ color: '#444', fontSize: '17px', margin: 0, fontWeight: '600' }}>{formatNames(nextPatient.names)}</p>
               {nextPatient.num_patients > 1 && (
-                <p style={{ color: '#bbb', fontSize: '12px', margin: '6px 0 0' }}>
-                  Group of {nextPatient.num_patients}
-                </p>
+                <p style={{ color: '#bbb', fontSize: '12px', margin: '6px 0 0' }}>Group of {nextPatient.num_patients}</p>
               )}
             </div>
           )}
         </div>
 
+        {/* ── Waiting list ── */}
         <div>
-          <p style={{ fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '3px', textTransform: 'uppercase', marginBottom: '12px' }}>
-            Waiting ({waitingPatients.length})
-          </p>
+          <p style={S.label}>Waiting ({waitingPatients.length})</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {waitingPatients.length === 0 && (
               <div style={{ ...S.card, padding: '36px', textAlign: 'center' }}>
@@ -222,15 +199,11 @@ export default function DisplayBoard() {
               </div>
             )}
             {waitingPatients.slice(0, 8).map((p, i) => (
-              <div
-                key={p.id}
-                className="cq-row-enter"
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 18px', borderRadius: '14px',
-                  background: i === 0 ? '#f0f7ff' : p.checkin_status === 'rejoined' ? '#fff8f0' : '#f9f9f9',
-                  border: `2px solid ${i === 0 ? '#2d6a9f' : p.checkin_status === 'rejoined' ? '#e67e22' : '#efefef'}`,
-                }}
-              >
+              <div key={p.id} className="cq-row-enter" style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '15px 18px', borderRadius: '14px',
+                background: i === 0 ? '#f0f7ff' : p.checkin_status === 'rejoined' ? '#fff8f0' : '#f9f9f9',
+                border: `2px solid ${i === 0 ? '#2d6a9f' : p.checkin_status === 'rejoined' ? '#e67e22' : '#efefef'}`,
+              }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
                   <span style={{ fontFamily: 'monospace', fontWeight: '800', fontSize: '19px', color: i === 0 ? '#1e3a5f' : '#ccc' }}>
                     #{p.token_number}{p.checkin_status === 'rejoined' && <span style={{ color: '#e67e22', fontSize: '13px' }}>R</span>}
@@ -250,19 +223,15 @@ export default function DisplayBoard() {
               </div>
             ))}
             {waitingPatients.length > 8 && (
-              <p style={{ textAlign: 'center', color: '#bbb', fontSize: '13px', margin: '4px 0 0' }}>
-                +{waitingPatients.length - 8} more in queue
-              </p>
+              <p style={{ textAlign: 'center', color: '#bbb', fontSize: '13px', margin: '4px 0 0' }}>+{waitingPatients.length - 8} more in queue</p>
             )}
           </div>
         </div>
 
+        {/* ── Right panel ── */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-
           <div>
-            <p style={{ fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '3px', textTransform: 'uppercase', marginBottom: '12px' }}>
-              Skipped
-            </p>
+            <p style={S.label}>Skipped</p>
             {skippedList.length === 0 ? (
               <div style={{ ...S.card, padding: '20px', textAlign: 'center' }}>
                 <p style={{ color: '#ccc', fontSize: '13px', margin: 0 }}>None so far</p>
@@ -292,16 +261,14 @@ export default function DisplayBoard() {
           )}
 
           <div style={{ ...S.card, padding: '18px' }}>
-            <p style={{ fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '2px', textTransform: 'uppercase', margin: '0 0 14px' }}>
-              Legend
-            </p>
+            <p style={{ fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '2px', textTransform: 'uppercase', margin: '0 0 14px' }}>Legend</p>
             {[
-              { color: '#00b894', label: 'Currently being served' },
-              { color: '#e67e22', label: 'Next in line' },
+              { color: '#1e3a5f', label: 'Currently being served' },
+              { color: '#2d6a9f', label: 'Next in line' },
               { color: '#e67e22', label: 'Rejoined after skip' },
               { color: '#e74c3c', label: 'No-show / Skipped' },
-            ].map(({ color, label }, idx) => (
-              <div key={idx} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '9px' }}>
+            ].map(({ color, label }) => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '9px' }}>
                 <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: color, flexShrink: 0 }} />
                 <span style={{ fontSize: '13px', color: '#888' }}>{label}</span>
               </div>
@@ -316,14 +283,12 @@ export default function DisplayBoard() {
               CLINIC<span style={{ color: '#2d6a9f' }}>Q</span>
             </p>
           </div>
-
         </div>
       </div>
 
       <p style={{ textAlign: 'center', fontSize: '11px', fontWeight: '800', letterSpacing: '4px', color: '#ddd', marginTop: '36px', marginBottom: 0 }}>
         CLINIC<span style={{ color: '#2d6a9f' }}>Q</span>
       </p>
-
     </div>
   );
 }

@@ -1,13 +1,21 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import SERVER from '../config';
+import { useClinic } from '../clinic';
 
 export default function Register() {
+  const { slug, clinic, api, socket } = useClinic();
   const [numPatients, setNumPatients] = useState(1);
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isPaused, setIsPaused] = useState(clinic.isPaused);
   const navigate = useNavigate();
+
+  // Live pause/resume from staff
+  useEffect(() => {
+    socket.on('queue-paused-updated', setIsPaused);
+    return () => socket.off('queue-paused-updated', setIsPaused);
+  }, [socket]);
 
   const handleNumChange = (val) => {
     const n = Math.max(1, Math.min(10, parseInt(val) || 1));
@@ -17,17 +25,18 @@ export default function Register() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    if (isPaused) return;
     if (!name.trim()) { setError('Please enter your name.'); return; }
     setLoading(true);
     try {
-      const res = await fetch(`${SERVER}/api/register`, {
+      const res = await fetch(`${api}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ names: [name.trim()], numPatients }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      navigate(`/token/${data.patient.access_token}`, { state: { existing: data.existing } });
+      navigate(`/c/${slug}/token/${data.patient.access_token}`, { state: { existing: data.existing } });
     } catch (err) {
       setError(err.message || 'Registration failed.');
     } finally {
@@ -35,29 +44,26 @@ export default function Register() {
     }
   };
 
+  const stepperButton = {
+    width: '54px', height: '54px', borderRadius: '14px', border: 'none',
+    background: 'white', boxShadow: '0 3px 10px rgba(30,58,95,0.1)',
+    fontSize: '24px', fontWeight: '700', color: '#2d6a9f', cursor: 'pointer',
+    transition: 'transform 0.15s',
+  };
+
   return (
     <div style={{
-      minHeight: '100vh',
-      background: '#f0f4f8',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '24px 16px',
-      fontFamily: "'Segoe UI',sans-serif",
-      position: 'relative',
-      overflow: 'hidden',
-      boxSizing: 'border-box',
+      minHeight: '100vh', background: '#f0f4f8', display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center', padding: '24px 16px',
+      fontFamily: "'Segoe UI',sans-serif", position: 'relative', overflow: 'hidden', boxSizing: 'border-box',
     }}>
 
       <div style={{
-        position: 'absolute', top: '-120px', right: '-120px',
-        width: '320px', height: '320px', borderRadius: '50%',
+        position: 'absolute', top: '-120px', right: '-120px', width: '320px', height: '320px', borderRadius: '50%',
         background: 'radial-gradient(circle, rgba(45,106,159,0.08) 0%, transparent 70%)',
       }} />
       <div style={{
-        position: 'absolute', bottom: '-140px', left: '-140px',
-        width: '360px', height: '360px', borderRadius: '50%',
+        position: 'absolute', bottom: '-140px', left: '-140px', width: '360px', height: '360px', borderRadius: '50%',
         background: 'radial-gradient(circle, rgba(30,58,95,0.06) 0%, transparent 70%)',
       }} />
 
@@ -68,44 +74,46 @@ export default function Register() {
       </div>
 
       <div className="cq-register-card" style={{
-        background: 'white',
-        borderRadius: '28px',
-        padding: '44px 36px',
-        width: '100%',
-        maxWidth: '440px',
+        background: 'white', borderRadius: '28px', padding: '44px 36px', width: '100%', maxWidth: '440px',
         boxShadow: '0 20px 50px rgba(30,58,95,0.12), 0 2px 8px rgba(30,58,95,0.06)',
-        position: 'relative',
-        zIndex: 1,
-        boxSizing: 'border-box',
+        position: 'relative', zIndex: 1, boxSizing: 'border-box',
       }}>
 
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <div className="cq-register-icon" style={{
-            width: '76px', height: '76px',
-            background: 'linear-gradient(150deg,#1e3a5f 0%,#2d6a9f 100%)',
-            borderRadius: '22px',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            margin: '0 auto 18px',
-            fontSize: '34px',
-            boxShadow: '0 10px 24px rgba(30,58,95,0.28)',
+            width: '76px', height: '76px', background: 'linear-gradient(150deg,#1e3a5f 0%,#2d6a9f 100%)',
+            borderRadius: '22px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 18px', fontSize: '34px', boxShadow: '0 10px 24px rgba(30,58,95,0.28)',
           }}>
             🏥
           </div>
           <h1 style={{ fontSize: '25px', fontWeight: '800', color: '#1a1a2e', margin: '0 0 6px', letterSpacing: '-0.3px' }}>
             Join the Queue
           </h1>
-          <p style={{ color: '#9aa5b1', fontSize: '13.5px', margin: 0 }}>
+          <p style={{ color: '#2d6a9f', fontSize: '15px', fontWeight: '700', margin: '0 0 4px' }}>
+            {clinic.name}
+          </p>
+          <p style={{ color: '#9aa5b1', fontSize: '13px', margin: 0 }}>
             Get your token in seconds — no app needed
           </p>
         </div>
 
+        {isPaused && (
+          <div style={{
+            background: '#fff8e6', border: '1.5px solid #f5d38a', borderRadius: '14px',
+            padding: '14px 16px', marginBottom: '22px', display: 'flex', gap: '10px', alignItems: 'flex-start',
+          }}>
+            <span style={{ fontSize: '18px' }}>⏸</span>
+            <p style={{ margin: 0, fontSize: '13.5px', color: '#a56a00', lineHeight: 1.45 }}>
+              Registrations are paused right now. Please check back in a few minutes — this page updates automatically.
+            </p>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit}>
 
           <div style={{ marginBottom: '22px' }}>
-            <label style={{
-              display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472',
-              marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px',
-            }}>
+            <label style={{ display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>
               Your Name
             </label>
             <input
@@ -113,18 +121,12 @@ export default function Register() {
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="e.g. Priya Sharma"
+              maxLength={60}
               required
               style={{
-                width: '100%',
-                border: '2px solid #eef1f5',
-                background: '#fbfcfe',
-                borderRadius: '14px',
-                padding: '15px 16px',
-                fontSize: '15.5px',
-                color: '#1a1a2e',
-                outline: 'none',
-                boxSizing: 'border-box',
-                transition: 'border-color 0.2s, background 0.2s',
+                width: '100%', border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '14px',
+                padding: '15px 16px', fontSize: '15.5px', color: '#1a1a2e', outline: 'none',
+                boxSizing: 'border-box', transition: 'border-color 0.2s, background 0.2s',
               }}
               onFocus={e => { e.target.style.borderColor = '#2d6a9f'; e.target.style.background = '#ffffff'; }}
               onBlur={e => { e.target.style.borderColor = '#eef1f5'; e.target.style.background = '#fbfcfe'; }}
@@ -132,10 +134,7 @@ export default function Register() {
           </div>
 
           <div style={{ marginBottom: '26px' }}>
-            <label style={{
-              display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472',
-              marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '1px',
-            }}>
+            <label style={{ display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '1px' }}>
               Number of People
             </label>
             <p style={{ fontSize: '12.5px', color: '#a8b1bd', marginBottom: '14px', marginTop: '2px' }}>
@@ -143,37 +142,22 @@ export default function Register() {
             </p>
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              background: 'linear-gradient(150deg,#f7f9fc,#f0f4f8)',
-              borderRadius: '18px', padding: '10px',
+              background: 'linear-gradient(150deg,#f7f9fc,#f0f4f8)', borderRadius: '18px', padding: '10px',
               border: '1px solid #eef1f5',
             }}>
-              <button type="button" onClick={() => handleNumChange(numPatients - 1)}
-                style={{
-                  width: '54px', height: '54px', borderRadius: '14px', border: 'none',
-                  background: 'white', boxShadow: '0 3px 10px rgba(30,58,95,0.1)',
-                  fontSize: '24px', fontWeight: '700', color: '#2d6a9f', cursor: 'pointer',
-                  transition: 'transform 0.15s',
-                }}
+              <button type="button" onClick={() => handleNumChange(numPatients - 1)} style={stepperButton}
                 onMouseDown={e => e.currentTarget.style.transform = 'scale(0.94)'}
                 onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
               >
                 −
               </button>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '44px', fontWeight: '900', color: '#1e3a5f', lineHeight: 1 }}>
-                  {numPatients}
-                </div>
+                <div style={{ fontSize: '44px', fontWeight: '900', color: '#1e3a5f', lineHeight: 1 }}>{numPatients}</div>
                 <div style={{ fontSize: '12px', color: '#a8b1bd', marginTop: '3px', fontWeight: '600' }}>
                   {numPatients === 1 ? 'person' : 'people'}
                 </div>
               </div>
-              <button type="button" onClick={() => handleNumChange(numPatients + 1)}
-                style={{
-                  width: '54px', height: '54px', borderRadius: '14px', border: 'none',
-                  background: 'white', boxShadow: '0 3px 10px rgba(30,58,95,0.1)',
-                  fontSize: '24px', fontWeight: '700', color: '#2d6a9f', cursor: 'pointer',
-                  transition: 'transform 0.15s',
-                }}
+              <button type="button" onClick={() => handleNumChange(numPatients + 1)} style={stepperButton}
                 onMouseDown={e => e.currentTarget.style.transform = 'scale(0.94)'}
                 onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
               >
@@ -184,14 +168,9 @@ export default function Register() {
 
           {name.trim() && (
             <div style={{
-              background: 'linear-gradient(135deg,#f0f7ff,#e8f2ff)',
-              border: '1.5px solid #d3e6f7',
-              borderRadius: '14px',
-              padding: '14px 18px',
-              marginBottom: '20px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '10px',
+              background: 'linear-gradient(135deg,#f0f7ff,#e8f2ff)', border: '1.5px solid #d3e6f7',
+              borderRadius: '14px', padding: '14px 18px', marginBottom: '20px',
+              display: 'flex', alignItems: 'center', gap: '10px',
             }}>
               <span style={{ fontSize: '18px' }}>👤</span>
               <p style={{ margin: 0, fontSize: '13.5px', color: '#2d6a9f', lineHeight: 1.4 }}>
@@ -211,25 +190,20 @@ export default function Register() {
             </div>
           )}
 
-          <button type="submit" disabled={loading}
+          <button type="submit" disabled={loading || isPaused}
             style={{
               width: '100%',
-              background: loading ? '#c3c9d1' : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '16px',
-              padding: '17px',
-              fontSize: '16px',
-              fontWeight: '700',
-              cursor: loading ? 'not-allowed' : 'pointer',
-              boxShadow: loading ? 'none' : '0 10px 28px rgba(30,58,95,0.32)',
-              letterSpacing: '0.3px',
-              transition: 'transform 0.15s, box-shadow 0.15s',
+              background: loading || isPaused ? '#c3c9d1' : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
+              color: 'white', border: 'none', borderRadius: '16px', padding: '17px',
+              fontSize: '16px', fontWeight: '700',
+              cursor: loading || isPaused ? 'not-allowed' : 'pointer',
+              boxShadow: loading || isPaused ? 'none' : '0 10px 28px rgba(30,58,95,0.32)',
+              letterSpacing: '0.3px', transition: 'transform 0.15s, box-shadow 0.15s',
             }}
-            onMouseDown={e => { if (!loading) e.currentTarget.style.transform = 'scale(0.98)'; }}
-            onMouseUp={e => { if (!loading) e.currentTarget.style.transform = 'scale(1)'; }}
+            onMouseDown={e => { if (!loading && !isPaused) e.currentTarget.style.transform = 'scale(0.98)'; }}
+            onMouseUp={e => { e.currentTarget.style.transform = 'scale(1)'; }}
           >
-            {loading ? 'Registering...' : 'Get My Token →'}
+            {isPaused ? 'Registrations Paused' : loading ? 'Registering...' : 'Get My Token →'}
           </button>
         </form>
 

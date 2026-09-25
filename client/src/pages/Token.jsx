@@ -1,9 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { io } from 'socket.io-client';
-import SERVER from '../config';
-
-const socket = io(SERVER);
+import { useClinic } from '../clinic';
 
 function formatNames(names) {
   if (!names || names.length === 0) return '';
@@ -18,35 +15,29 @@ function formatCountdown(s) {
 
 function formatRegisteredAt(dateStr) {
   if (!dateStr) return { date: '', time: '' };
-
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return { date: '', time: '' };
 
-  const date = d.toLocaleDateString('en-IN', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    timeZone: 'Asia/Kolkata'
-  });
-
-  const time = d.toLocaleTimeString('en-IN', {
-    hour: '2-digit', minute: '2-digit', hour12: true,
-    timeZone: 'Asia/Kolkata'
-  });
-
+  const date = d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+  const time = d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
   return { date, time };
 }
 
-function TopBar() {
+function TopBar({ clinicName }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-      <span style={{ fontSize: '13px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', textTransform: 'uppercase' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', gap: '12px' }}>
+      <span style={{ fontSize: '13px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', textTransform: 'uppercase', flexShrink: 0 }}>
         Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
       </span>
-      <span style={{ fontSize: '11px', color: '#ddd', letterSpacing: '1px' }}>Your Token</span>
+      <span style={{ fontSize: '12px', color: '#8a94a3', fontWeight: '600', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {clinicName}
+      </span>
     </div>
   );
 }
 
 export default function Token() {
+  const { slug, clinic, api, socket } = useClinic();
   const { accessToken } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -61,12 +52,14 @@ export default function Token() {
   const [checkedIn, setCheckedIn] = useState(false);
   const [wasSkipped, setWasSkipped] = useState(false);
   const [rejoining, setRejoining] = useState(false);
+  const [actionError, setActionError] = useState('');
 
   const fetchPatient = useCallback(() => {
-    fetch(`${SERVER}/api/patient/${accessToken}`)
-      .then(r => r.json())
-      .then(data => { setPatient(data); setLoading(false); });
-  }, [accessToken]);
+    fetch(`${api}/patient/${accessToken}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => { setPatient(data); setLoading(false); })
+      .catch(() => { setPatient(null); setLoading(false); });
+  }, [api, accessToken]);
 
   useEffect(() => {
     setPatient(null);
@@ -75,17 +68,20 @@ export default function Token() {
     setCheckedIn(false);
     setWasSkipped(false);
     setRejoining(false);
+    setActionError('');
 
     fetchPatient();
-    fetch(`${SERVER}/api/queue/full`)
+    fetch(`${api}/queue/full`)
       .then(r => r.json())
       .then(data => {
-        setFullQueue(data.queue);
-        setSkippedList(data.skipped);
+        setFullQueue(data.queue || []);
+        setSkippedList(data.skipped || []);
         setAvgMins(data.avgMinsPerPerson);
-      });
-  }, [accessToken, fetchPatient]);
+      })
+      .catch(() => {});
+  }, [api, accessToken, fetchPatient]);
 
+  // Countdown while called and not yet checked in
   useEffect(() => {
     if (!patient?.checkin_deadline || patient.status !== 'called' || checkedIn) return;
     const deadline = new Date(patient.checkin_deadline).getTime();
@@ -97,63 +93,76 @@ export default function Token() {
     return () => clearInterval(tick);
   }, [patient, checkedIn]);
 
+  // Live updates for this clinic
   useEffect(() => {
-    socket.on('full-queue-updated', setFullQueue);
-    socket.on('skipped-list-updated', setSkippedList);
-    socket.on('avg-updated', setAvgMins);
-    socket.on('patient-called', (called) => {
+    const onCalled = (called) => {
       if (patient && called.id === patient.id) {
         setPatient(prev => ({ ...prev, ...called }));
         const deadline = new Date(called.checkin_deadline).getTime();
         setCountdown(Math.max(0, Math.floor((deadline - Date.now()) / 1000)));
       }
-    });
-    socket.on('patient-skipped', (skipped) => {
+    };
+    const onSkipped = (skipped) => {
       if (patient && skipped.id === patient.id) {
         setPatient(prev => ({ ...prev, status: 'skipped', skip_reason: skipped.skip_reason }));
         setWasSkipped(true);
       }
-    });
-    socket.on('checkin-confirmed', ({ patientId }) => {
-      if (patient && patientId === patient.id) setCheckedIn(true);
-    });
-    return () => {
-      socket.off('full-queue-updated');
-      socket.off('skipped-list-updated');
-      socket.off('avg-updated');
-      socket.off('patient-called');
-      socket.off('patient-skipped');
-      socket.off('checkin-confirmed');
     };
-  }, [patient]);
+    const onCheckin = ({ patientId }) => {
+      if (patient && patientId === patient.id) setCheckedIn(true);
+    };
+
+    socket.on('full-queue-updated', setFullQueue);
+    socket.on('skipped-list-updated', setSkippedList);
+    socket.on('avg-updated', setAvgMins);
+    socket.on('patient-called', onCalled);
+    socket.on('patient-skipped', onSkipped);
+    socket.on('checkin-confirmed', onCheckin);
+
+    return () => {
+      socket.off('full-queue-updated', setFullQueue);
+      socket.off('skipped-list-updated', setSkippedList);
+      socket.off('avg-updated', setAvgMins);
+      socket.off('patient-called', onCalled);
+      socket.off('patient-skipped', onSkipped);
+      socket.off('checkin-confirmed', onCheckin);
+    };
+  }, [patient, socket]);
 
   const handleCheckin = async () => {
-    const res = await fetch(`${SERVER}/api/checkin/${accessToken}`, { method: 'POST' });
-    const data = await res.json();
-    if (data.success) setCheckedIn(true);
+    setActionError('');
+    try {
+      const res = await fetch(`${api}/checkin/${accessToken}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) setCheckedIn(true);
+      else setActionError(data.reason || 'Could not check in.');
+    } catch {
+      setActionError('Could not reach the clinic. Please try again.');
+    }
   };
 
   const handleRejoin = async () => {
     setRejoining(true);
-    const res = await fetch(`${SERVER}/api/rejoin/${accessToken}`, { method: 'POST' });
-    const data = await res.json();
-    if (data.success) {
-      navigate(`/token/${data.patient.access_token}`);
-    } else {
+    setActionError('');
+    try {
+      const res = await fetch(`${api}/rejoin/${accessToken}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        navigate(`/c/${slug}/token/${data.patient.access_token}`);
+      } else {
+        setActionError(data.error || 'Could not rejoin the queue.');
+        setRejoining(false);
+      }
+    } catch {
+      setActionError('Could not reach the clinic. Please try again.');
       setRejoining(false);
     }
   };
 
   const activeQueue = fullQueue.filter(p => p.status === 'waiting' || p.status === 'called');
   const myIndex = patient ? activeQueue.findIndex(p => p.id === patient.id) : -1;
-
-  const peopleAhead = activeQueue
-    .slice(0, myIndex)
-    .reduce((sum, p) => sum + p.num_patients, 0);
-
-  const estimatedMins = avgMins !== null && myIndex > 0
-    ? Math.round(peopleAhead * avgMins)
-    : null;
+  const peopleAhead = activeQueue.slice(0, myIndex).reduce((sum, p) => sum + p.num_patients, 0);
+  const estimatedMins = avgMins !== null && myIndex > 0 ? Math.round(peopleAhead * avgMins) : null;
 
   const formatEstimate = (mins) => {
     if (mins < 1) return 'Less than a minute';
@@ -168,7 +177,6 @@ export default function Token() {
   const isCalled = patient?.status === 'called';
   const isWaiting = patient?.status === 'waiting';
   const isDone = patient?.status === 'done';
-
   const registeredAt = formatRegisteredAt(patient?.created_at);
 
   const S = {
@@ -183,8 +191,19 @@ export default function Token() {
   );
 
   if (!patient) return (
-    <div style={{ ...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <p style={{ color: '#bbb' }}>Token not found.</p>
+    <div style={{ ...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
+      <div style={{ maxWidth: '340px' }}>
+        <h1 style={{ fontSize: '20px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 8px' }}>Token not found</h1>
+        <p style={{ color: '#8a94a3', fontSize: '14px', margin: '0 0 20px', lineHeight: 1.5 }}>
+          This token may be from a previous day. You can join today's queue at {clinic.name}.
+        </p>
+        <button
+          onClick={() => navigate(`/c/${slug}/register`)}
+          style={{ background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '12px', padding: '12px 24px', fontWeight: '700', cursor: 'pointer' }}
+        >
+          Join the Queue
+        </button>
+      </div>
     </div>
   );
 
@@ -192,13 +211,19 @@ export default function Token() {
     <div style={S.page}>
       <div style={{ maxWidth: '420px', margin: '0 auto' }}>
 
-        <TopBar />
+        <TopBar clinicName={clinic.name} />
 
         {isExisting && (
           <div style={{ background: 'linear-gradient(135deg,#0984e3,#74b9ff)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
             <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0 }}>
               Welcome back! You already have an active token today.
             </p>
+          </div>
+        )}
+
+        {actionError && (
+          <div style={{ background: '#fff0f0', border: '1.5px solid #ffcccc', borderRadius: '14px', padding: '12px 16px', marginBottom: '16px' }}>
+            <p style={{ margin: 0, fontSize: '13px', color: '#cc0000' }}>{actionError}</p>
           </div>
         )}
 
@@ -242,35 +267,23 @@ export default function Token() {
           </div>
         )}
 
-        <div style={{
-          background: 'white',
-          borderRadius: '20px',
-          padding: '24px',
-          marginBottom: '16px',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.07)',
-          border: '2px dashed #e8eef5',
-          boxSizing: 'border-box',
-        }}>
+        <div style={{ background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', border: '2px dashed #e8eef5', boxSizing: 'border-box' }}>
 
           <p style={{ textAlign: 'center', fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '4px' }}>
             Token Number
           </p>
 
           <div className="cq-token-number" style={{ fontSize: '96px', fontWeight: '900', color: '#1e3a5f', lineHeight: 1, textAlign: 'center' }}>
-            {patient?.token_number}
+            {patient.token_number}
           </div>
 
           {registeredAt.date && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginTop: '6px', marginBottom: '4px' }}>
               <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
               <div style={{ textAlign: 'center' }}>
-                <span style={{ fontSize: '11px', color: '#c8d6e5', fontWeight: '600', letterSpacing: '0.5px' }}>
-                  {registeredAt.date}
-                </span>
+                <span style={{ fontSize: '11px', color: '#c8d6e5', fontWeight: '600', letterSpacing: '0.5px' }}>{registeredAt.date}</span>
                 <span style={{ fontSize: '11px', color: '#c8d6e5', fontWeight: '600', margin: '0 6px' }}>·</span>
-                <span style={{ fontSize: '11px', color: '#c8d6e5', fontWeight: '600', letterSpacing: '0.5px' }}>
-                  {registeredAt.time}
-                </span>
+                <span style={{ fontSize: '11px', color: '#c8d6e5', fontWeight: '600', letterSpacing: '0.5px' }}>{registeredAt.time}</span>
               </div>
               <div style={{ flex: 1, height: '1px', background: '#f0f0f0' }} />
             </div>
@@ -278,34 +291,22 @@ export default function Token() {
 
           <div style={{ textAlign: 'center', marginTop: '10px' }}>
             {isRejoined && (
-              <span style={{ background: '#fff3e0', color: '#e67e22', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>
-                Rejoined at end of queue
-              </span>
+              <span style={{ background: '#fff3e0', color: '#e67e22', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Rejoined at end of queue</span>
             )}
             {isSkipped && (
-              <span style={{ background: '#fff0f0', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>
-                Skipped
-              </span>
+              <span style={{ background: '#fff0f0', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Skipped</span>
             )}
             {isCalled && !checkedIn && (
-              <span style={{ background: '#fff8e1', color: '#f39c12', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>
-                Called
-              </span>
+              <span style={{ background: '#fff8e1', color: '#f39c12', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Called</span>
             )}
             {isCalled && checkedIn && (
-              <span style={{ background: '#e8f8f5', color: '#00b894', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>
-                Checked In
-              </span>
+              <span style={{ background: '#e8f8f5', color: '#00b894', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Checked In</span>
             )}
             {isWaiting && !isRejoined && (
-              <span style={{ background: '#f0f7ff', color: '#2d6a9f', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>
-                Waiting
-              </span>
+              <span style={{ background: '#f0f7ff', color: '#2d6a9f', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Waiting</span>
             )}
             {isDone && (
-              <span style={{ background: '#f0fff4', color: '#27ae60', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>
-                Done
-              </span>
+              <span style={{ background: '#f0fff4', color: '#27ae60', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Done</span>
             )}
           </div>
 
@@ -316,12 +317,10 @@ export default function Token() {
 
           <div style={{ background: '#f7f9fc', borderRadius: '14px', padding: '16px', textAlign: 'center' }}>
             <p style={{ fontSize: '11px', color: '#bbb', fontWeight: '700', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '4px' }}>
-              {patient?.num_patients === 1 ? 'Patient' : 'Registered By'}
+              {patient.num_patients === 1 ? 'Patient' : 'Registered By'}
             </p>
-            <p style={{ fontSize: '18px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>
-              {formatNames(patient?.names)}
-            </p>
-            {patient?.num_patients > 1 && (
+            <p style={{ fontSize: '18px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>{formatNames(patient.names)}</p>
+            {patient.num_patients > 1 && (
               <p style={{ fontSize: '12px', color: '#bbb', margin: 0 }}>Group of {patient.num_patients} people</p>
             )}
           </div>
@@ -338,23 +337,15 @@ export default function Token() {
 
               {estimatedMins !== null && (
                 <div style={{ background: '#fffbf0', border: '1.5px solid #fdebd0', borderRadius: '14px', padding: '16px', textAlign: 'center' }}>
-                  <p style={{ fontSize: '11px', color: '#e67e22', fontWeight: '700', letterSpacing: '1px', textTransform: 'uppercase', margin: '0 0 6px' }}>
-                    Estimated Wait
-                  </p>
-                  <p style={{ fontSize: '32px', fontWeight: '900', color: '#e67e22', margin: '0 0 6px' }}>
-                    {formatEstimate(estimatedMins)}
-                  </p>
-                  <p style={{ fontSize: '11px', color: '#bbb', margin: 0 }}>
-                    Based on {avgMins} min/person avg · Just an estimate, may vary
-                  </p>
+                  <p style={{ fontSize: '11px', color: '#e67e22', fontWeight: '700', letterSpacing: '1px', textTransform: 'uppercase', margin: '0 0 6px' }}>Estimated Wait</p>
+                  <p style={{ fontSize: '32px', fontWeight: '900', color: '#e67e22', margin: '0 0 6px' }}>{formatEstimate(estimatedMins)}</p>
+                  <p style={{ fontSize: '11px', color: '#bbb', margin: 0 }}>Based on {avgMins} min/person avg · Just an estimate, may vary</p>
                 </div>
               )}
 
               {avgMins === null && myIndex > 0 && (
                 <div style={{ background: '#f9f9f9', border: '1px solid #eee', borderRadius: '14px', padding: '12px 16px', textAlign: 'center' }}>
-                  <p style={{ fontSize: '12px', color: '#bbb', margin: 0 }}>
-                    Wait estimate will appear once a few patients have been seen
-                  </p>
+                  <p style={{ fontSize: '12px', color: '#bbb', margin: 0 }}>Wait estimate will appear once a few patients have been seen</p>
                 </div>
               )}
             </div>
@@ -383,17 +374,12 @@ export default function Token() {
             <p style={{ textAlign: 'center', color: '#bbb', fontSize: '14px', padding: '16px 0' }}>Queue is empty</p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
-              {activeQueue.map((entry) => {
-                const isMe = patient && entry.id === patient.id;
+              {activeQueue.map((entry, entryIndex) => {
+                const isMe = entry.id === patient.id;
                 const entryRejoined = entry.checkin_status === 'rejoined';
                 const entryCalled = entry.status === 'called';
-                const entryIndex = activeQueue.findIndex(e => e.id === entry.id);
-                const peopleBeforeEntry = activeQueue
-                  .slice(0, entryIndex)
-                  .reduce((sum, p) => sum + p.num_patients, 0);
-                const entryEstimate = avgMins !== null && entryIndex > 0
-                  ? Math.round(peopleBeforeEntry * avgMins)
-                  : null;
+                const peopleBeforeEntry = activeQueue.slice(0, entryIndex).reduce((sum, p) => sum + p.num_patients, 0);
+                const entryEstimate = avgMins !== null && entryIndex > 0 ? Math.round(peopleBeforeEntry * avgMins) : null;
 
                 return (
                   <div key={entry.id} style={{
