@@ -37,6 +37,12 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Queue data changes constantly — never let browsers or proxies reuse an old answer
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 const PORT = process.env.PORT || 3001;
 
 // Old links (/api/..., /register) belong to this clinic
@@ -159,7 +165,20 @@ ownerRouter.patch('/clinics/:id', requireOwner, async (req, res) => {
 
     const clinic = await db.updateClinic(Number(req.params.id), updates);
     if (!clinic) return res.status(404).json({ error: 'Clinic not found' });
+
+    // Let that clinic's open pages refresh their info (name, on/off)
+    const visibleChange =
+      updates.name !== undefined || updates.is_active !== undefined || updates.day_reset_hour !== undefined;
+    if (visibleChange) {
+      io.to(roomFor(clinic.id)).emit('clinic-updated');
+    }
+    // Turned off: also cut its live connections
+    if (updates.is_active === false) {
+      io.in(roomFor(clinic.id)).disconnectSockets(true);
+    }
+
     res.json({ clinic });
+    
   } catch (err) {
     console.error('❌ PATCH /api/owner/clinics/:id error:', err);
     res.status(500).json({ error: 'Server error' });

@@ -1,17 +1,24 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { Outlet, useParams } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import SERVER from './config';
 
 const ClinicContext = createContext(null);
 
-// One live connection per clinic, reused across pages
+const INACTIVE_RECHECK_MS = 30000;
+
+// One live connection per clinic, reused across pages.
+// If the server cut it (clinic was turned off), reconnect when needed again.
 const sockets = new Map();
 function getClinicSocket(slug) {
-  if (!sockets.has(slug)) {
-    sockets.set(slug, io(SERVER, { query: { clinic: slug } }));
+  let socket = sockets.get(slug);
+  if (!socket) {
+    socket = io(SERVER, { query: { clinic: slug } });
+    sockets.set(slug, socket);
+  } else if (!socket.active) {
+    socket.connect();
   }
-  return sockets.get(slug);
+  return socket;
 }
 
 function CenteredMessage({ icon, title, text, note, showRetry }) {
@@ -62,33 +69,60 @@ export function ClinicLayout() {
   const { slug } = useParams();
   const [state, setState] = useState({ status: 'loading', clinic: null, name: '' });
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ status: 'loading', clinic: null, name: '' });
-
-    fetch(`${SERVER}/api/c/${encodeURIComponent(slug)}/info`)
-      .then(async (res) => {
-        if (cancelled) return;
-
-        if (res.status === 404) {
-          return setState({ status: 'notFound', clinic: null, name: '' });
-        }
-        if (res.status === 410) {
-          const body = await res.json().catch(() => ({}));
-          if (!cancelled) setState({ status: 'inactive', clinic: null, name: body.name || '' });
-          return;
-        }
-        if (!res.ok) throw new Error('Server error');
-
-        const info = await res.json();
-        if (!cancelled) setState({ status: 'ready', clinic: info, name: info.name });
-      })
-      .catch(() => {
-        if (!cancelled) setState({ status: 'error', clinic: null, name: '' });
+  // Fetches the clinic's current info. Always asks the server for a fresh answer.
+  const loadClinic = useCallback(async (signal) => {
+    try {
+      const res = await fetch(`${SERVER}/api/c/${encodeURIComponent(slug)}/info`, {
+        cache: 'no-store',
+        signal,
       });
 
-    return () => { cancelled = true; };
+      if (res.status === 404) {
+        return setState({ status: 'notFound', clinic: null, name: '' });
+      }
+      if (res.status === 410) {
+        const body = await res.json().catch(() => ({}));
+        return setState({ status: 'inactive', clinic: null, name: body.name || '' });
+      }
+      if (!res.ok) throw new Error('Server error');
+
+      const info = await res.json();
+      setState({ status: 'ready', clinic: info, name: info.name });
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      // If a background re-check fails, keep showing the page we already have
+      setState(prev => (prev.status === 'ready' ? prev : { status: 'error', clinic: null, name: '' }));
+    }
   }, [slug]);
+
+  // First load (and whenever the link changes)
+  useEffect(() => {
+    const controller = new AbortController();
+    setState({ status: 'loading', clinic: null, name: '' });
+    loadClinic(controller.signal);
+    return () => controller.abort();
+  }, [loadClinic]);
+
+  // While the clinic is turned off, check back every 30 seconds
+  useEffect(() => {
+    if (state.status !== 'inactive') return;
+    const controller = new AbortController();
+    const timer = setInterval(() => loadClinic(controller.signal), INACTIVE_RECHECK_MS);
+    return () => {
+      clearInterval(timer);
+      controller.abort();
+    };
+  }, [state.status, loadClinic]);
+
+  // While active, refresh instantly when the owner changes the clinic
+  const readySlug = state.status === 'ready' ? state.clinic.slug : null;
+  useEffect(() => {
+    if (!readySlug) return;
+    const socket = getClinicSocket(readySlug);
+    const onClinicUpdated = () => loadClinic();
+    socket.on('clinic-updated', onClinicUpdated);
+    return () => socket.off('clinic-updated', onClinicUpdated);
+  }, [readySlug, loadClinic]);
 
   if (state.status === 'loading') {
     return <CenteredMessage text="Connecting to the clinic… The first load can take up to a minute." />;
