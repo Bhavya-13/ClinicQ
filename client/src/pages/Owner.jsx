@@ -6,6 +6,24 @@ const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const PIN_PATTERN = /^\d{6,12}$/;
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
+// Listing fields: form key → database column, label, max length, placeholder
+const LISTING_INPUTS = [
+  { key: 'doctorName', column: 'doctor_name', label: 'Doctor name', max: 80, placeholder: 'e.g. Dr. Anil Sharma' },
+  { key: 'specialty', column: 'specialty', label: 'Specialty', max: 60, placeholder: 'e.g. General Physician' },
+  { key: 'area', column: 'area', label: 'Area', max: 60, placeholder: 'e.g. Dharampeth' },
+  { key: 'city', column: 'city', label: 'City', max: 40, placeholder: 'e.g. Nagpur' },
+  { key: 'address', column: 'address', label: 'Address', max: 200, placeholder: 'Street, landmark' },
+  { key: 'timings', column: 'timings', label: 'Timings', max: 120, placeholder: 'e.g. Mon–Sat, 10 AM–1 PM & 6–9 PM' },
+];
+
+const EMPTY_LISTING = { doctorName: '', specialty: '', area: '', city: '', address: '', timings: '', isListed: false };
+
+function listingFromClinic(clinic) {
+  const values = { isListed: clinic.is_listed === true };
+  LISTING_INPUTS.forEach(({ key, column }) => { values[key] = clinic[column] || ''; });
+  return values;
+}
+
 function slugify(text) {
   return text
     .toLowerCase()
@@ -30,7 +48,36 @@ const S = {
   secondary: { background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '8px 14px', fontSize: '13px', fontWeight: '700', cursor: 'pointer' },
   error: { color: '#cc0000', fontSize: '13px', margin: '0 0 12px' },
   hint: { fontSize: '12px', color: '#a8b1bd', margin: '6px 0 0' },
+  sectionTitle: { fontSize: '13px', fontWeight: '800', color: '#1e3a5f', margin: '6px 0 12px' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginBottom: '14px' },
 };
+
+// Shared "public listing" inputs used by both the create and edit forms
+function ListingFields({ values, onChange }) {
+  return (
+    <>
+      <p style={S.sectionTitle}>Public listing (shown on the ClinicQ homepage)</p>
+      <div style={S.grid}>
+        {LISTING_INPUTS.map(({ key, label, max, placeholder }) => (
+          <div key={key}>
+            <label style={S.label}>{label}</label>
+            <input
+              style={S.input}
+              value={values[key]}
+              maxLength={max}
+              placeholder={placeholder}
+              onChange={e => onChange({ ...values, [key]: e.target.value })}
+            />
+          </div>
+        ))}
+      </div>
+      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#444', marginBottom: '14px', cursor: 'pointer' }}>
+        <input type="checkbox" checked={values.isListed} onChange={e => onChange({ ...values, isListed: e.target.checked })} />
+        Show in public search (only tick this if the clinic agreed)
+      </label>
+    </>
+  );
+}
 
 function CreateClinicForm({ ownerFetch, onCreated }) {
   const [name, setName] = useState('');
@@ -39,6 +86,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
   const [pin, setPin] = useState('');
   const [pinConfirm, setPinConfirm] = useState('');
   const [hour, setHour] = useState(16);
+  const [listing, setListing] = useState(EMPTY_LISTING);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -60,7 +108,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
     try {
       const res = await ownerFetch('/clinics', {
         method: 'POST',
-        body: JSON.stringify({ name: name.trim(), slug, pin, dayResetHour: Number(hour) }),
+        body: JSON.stringify({ name: name.trim(), slug, pin, dayResetHour: Number(hour), ...listing }),
       });
       if (!res) return;
       const data = await res.json();
@@ -69,6 +117,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
       onCreated(data.clinic);
       setName(''); setSlug(''); setSlugTouched(false);
       setPin(''); setPinConfirm(''); setHour(16);
+      setListing(EMPTY_LISTING);
     } catch {
       setError('Could not reach the server.');
     } finally {
@@ -80,10 +129,11 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
     <form onSubmit={submit} style={S.card}>
       <h2 style={{ fontSize: '17px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 18px' }}>Add a clinic</h2>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '16px' }}>
+      <p style={S.sectionTitle}>Clinic setup</p>
+      <div style={S.grid}>
         <div>
           <label style={S.label}>Clinic name</label>
-          <input style={S.input} value={name} maxLength={80} onChange={e => handleName(e.target.value)} placeholder="e.g. Dr. Sharma's Clinic" />
+          <input style={S.input} value={name} maxLength={80} onChange={e => handleName(e.target.value)} placeholder="e.g. Sharma Clinic" />
         </div>
         <div>
           <label style={S.label}>Link name</label>
@@ -113,6 +163,8 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
         </div>
       </div>
 
+      <ListingFields values={listing} onChange={setListing} />
+
       {error && <p style={S.error}>{error}</p>}
 
       <button type="submit" disabled={saving} style={{ ...S.primary, opacity: saving ? 0.7 : 1 }}>
@@ -128,6 +180,7 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
   const [hour, setHour] = useState(clinic.day_reset_hour);
   const [newPin, setNewPin] = useState('');
   const [isActive, setIsActive] = useState(clinic.is_active);
+  const [listing, setListing] = useState(() => listingFromClinic(clinic));
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState('');
@@ -139,11 +192,15 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
     { label: 'Display', url: `${base}/display` },
   ];
 
+  const doctorLine = [clinic.doctor_name, clinic.specialty].filter(Boolean).join(' · ');
+  const placeLine = [clinic.area, clinic.city].filter(Boolean).join(', ');
+
   const startEditing = () => {
     setName(clinic.name);
     setHour(clinic.day_reset_hour);
     setNewPin('');
     setIsActive(clinic.is_active);
+    setListing(listingFromClinic(clinic));
     setError('');
     setEditing(true);
   };
@@ -167,6 +224,13 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
       if (!PIN_PATTERN.test(newPin)) return setError('New PIN must be 6–12 digits.');
       updates.pin = newPin;
     }
+
+    // Only send listing fields that actually changed
+    LISTING_INPUTS.forEach(({ key, column }) => {
+      if (listing[key].trim() !== (clinic[column] || '')) updates[key] = listing[key].trim();
+    });
+    if (listing.isListed !== clinic.is_listed) updates.isListed = listing.isListed;
+
     if (Object.keys(updates).length === 0) {
       setEditing(false);
       return;
@@ -193,23 +257,25 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
     }
   };
 
+  const badge = (text, bg, color) => (
+    <span style={{ fontSize: '12px', fontWeight: '700', padding: '5px 12px', borderRadius: '20px', background: bg, color }}>{text}</span>
+  );
+
   return (
     <div style={{ ...S.card, opacity: clinic.is_active ? 1 : 0.7 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
-        <div>
+        <div style={{ minWidth: 0 }}>
           <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 4px' }}>{clinic.name}</h3>
+          {doctorLine && <p style={{ fontSize: '13.5px', color: '#2d6a9f', fontWeight: '600', margin: '0 0 2px' }}>{doctorLine}</p>}
+          {placeLine && <p style={{ fontSize: '13px', color: '#6b7684', margin: '0 0 2px' }}>📍 {placeLine}</p>}
           <p style={{ fontSize: '13px', color: '#8a94a3', margin: 0 }}>
             /c/{clinic.slug} · resets at {formatHour(clinic.day_reset_hour)}
             {clinic.is_paused && ' · registrations paused'}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <span style={{
-            fontSize: '12px', fontWeight: '700', padding: '5px 12px', borderRadius: '20px',
-            background: clinic.is_active ? '#e8f8f5' : '#f0f0f0', color: clinic.is_active ? '#00a37a' : '#888',
-          }}>
-            {clinic.is_active ? 'Active' : 'Turned off'}
-          </span>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {clinic.is_active ? badge('Active', '#e8f8f5', '#00a37a') : badge('Turned off', '#f0f0f0', '#888')}
+          {clinic.is_listed ? badge('Listed in search', '#e8f2ff', '#2d6a9f') : badge('Not listed', '#f7f7f7', '#999')}
           {!editing && <button style={S.secondary} onClick={startEditing}>Edit</button>}
         </div>
       </div>
@@ -228,7 +294,8 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
 
       {editing && (
         <div style={{ marginTop: '18px', borderTop: '1px solid #eef1f5', paddingTop: '18px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '14px' }}>
+          <p style={S.sectionTitle}>Clinic setup</p>
+          <div style={S.grid}>
             <div>
               <label style={S.label}>Clinic name</label>
               <input style={S.input} value={name} maxLength={80} onChange={e => setName(e.target.value)} />
@@ -246,9 +313,11 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
             </div>
           </div>
 
+          <ListingFields values={listing} onChange={setListing} />
+
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#444', marginBottom: '14px', cursor: 'pointer' }}>
             <input type="checkbox" checked={isActive} onChange={e => setIsActive(e.target.checked)} />
-            Clinic is active (unticking turns off all its links)
+            Clinic is active (unticking turns off all its links and hides it from search)
           </label>
 
           {error && <p style={S.error}>{error}</p>}
@@ -368,7 +437,10 @@ export default function Owner() {
             </p>
             <h1 style={{ fontSize: '26px', fontWeight: '900', color: '#1e3a5f', margin: 0 }}>Clinics</h1>
           </div>
-          <button style={S.secondary} onClick={() => logout()}>🔒 Log out</button>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <a href="/" target="_blank" rel="noreferrer" style={{ ...S.secondary, textDecoration: 'none' }}>View homepage ↗</a>
+            <button style={S.secondary} onClick={() => logout()}>🔒 Log out</button>
+          </div>
         </div>
 
         {notice && (

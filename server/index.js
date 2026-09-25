@@ -69,6 +69,30 @@ async function broadcast(clinic) {
 }
 
 // ── Owner routes (you) — must be registered before the old /api mount ──
+// ── Clinic listing details (shown on the public homepage) ──
+const LISTING_FIELDS = {
+  doctorName: { column: 'doctor_name', label: 'Doctor name', max: 80 },
+  specialty:  { column: 'specialty',   label: 'Specialty',   max: 60 },
+  area:       { column: 'area',        label: 'Area',        max: 60 },
+  city:       { column: 'city',        label: 'City',        max: 40 },
+  address:    { column: 'address',     label: 'Address',     max: 200 },
+  timings:    { column: 'timings',     label: 'Timings',     max: 120 },
+};
+
+// Reads optional listing fields from a request body. Empty text clears a field.
+function readListingFields(body) {
+  const fields = {};
+  for (const [key, { column, label, max }] of Object.entries(LISTING_FIELDS)) {
+    if (body[key] === undefined) continue;
+    const value = String(body[key] ?? '').trim();
+    if (value.length > max) return { error: `${label} is too long (max ${max} characters)` };
+    fields[column] = value || null;
+  }
+  if (body.isListed !== undefined) fields.is_listed = body.isListed === true;
+  return { fields };
+}
+
+// ── Owner routes (you) — must be registered before the old /api mount ──
 const ownerRouter = express.Router();
 
 function requireOwner(req, res, next) {
@@ -111,10 +135,11 @@ ownerRouter.get('/clinics', requireOwner, async (req, res) => {
 
 ownerRouter.post('/clinics', requireOwner, async (req, res) => {
   try {
-    const slug = String(req.body?.slug || '').trim().toLowerCase();
-    const name = String(req.body?.name || '').trim();
-    const pin = String(req.body?.pin || '');
-    const dayResetHour = req.body?.dayResetHour === undefined ? 16 : Number(req.body.dayResetHour);
+    const body = req.body || {};
+    const slug = String(body.slug || '').trim().toLowerCase();
+    const name = String(body.name || '').trim();
+    const pin = String(body.pin || '');
+    const dayResetHour = body.dayResetHour === undefined ? 16 : Number(body.dayResetHour);
 
     if (!SLUG_PATTERN.test(slug) || slug.length < 3 || slug.length > 40)
       return res.status(400).json({ error: 'Link name must be 3–40 lowercase letters, numbers or single hyphens (e.g. dr-sharma)' });
@@ -125,7 +150,16 @@ ownerRouter.post('/clinics', requireOwner, async (req, res) => {
     if (!Number.isInteger(dayResetHour) || dayResetHour < 0 || dayResetHour > 23)
       return res.status(400).json({ error: 'Reset hour must be a whole number from 0 to 23' });
 
-    const clinic = await db.createClinic({ slug, name, pinHash: auth.hashPin(pin), dayResetHour });
+    const listing = readListingFields(body);
+    if (listing.error) return res.status(400).json({ error: listing.error });
+
+    const clinic = await db.createClinic({
+      slug,
+      name,
+      pinHash: auth.hashPin(pin),
+      dayResetHour,
+      listing: listing.fields,
+    });
     res.status(201).json({ clinic });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'That link name is already taken' });
@@ -159,6 +193,11 @@ ownerRouter.patch('/clinics/:id', requireOwner, async (req, res) => {
     if (body.isActive !== undefined) {
       updates.is_active = body.isActive === true;
     }
+
+    const listing = readListingFields(body);
+    if (listing.error) return res.status(400).json({ error: listing.error });
+    Object.assign(updates, listing.fields);
+
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ error: 'Nothing to update' });
     }
@@ -178,7 +217,6 @@ ownerRouter.patch('/clinics/:id', requireOwner, async (req, res) => {
     }
 
     res.json({ clinic });
-    
   } catch (err) {
     console.error('❌ PATCH /api/owner/clinics/:id error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -186,6 +224,16 @@ ownerRouter.patch('/clinics/:id', requireOwner, async (req, res) => {
 });
 
 app.use('/api/owner', ownerRouter);
+
+// ── Public clinic search (homepage) — only active clinics that chose to be listed ──
+app.get('/api/public/clinics', async (req, res) => {
+  try {
+    res.json({ clinics: await db.listListedClinics() });
+  } catch (err) {
+    console.error('❌ GET /api/public/clinics error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // ── Clinic routes — /api/c/<slug>/... (new) and /api/... (old links = demo) ──
 const clinicRouter = express.Router({ mergeParams: true });

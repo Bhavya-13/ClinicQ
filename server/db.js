@@ -20,7 +20,11 @@ const PUBLIC_PATIENT_FIELDS =
   'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at';
 
 const CLINIC_ADMIN_FIELDS =
-  'id, slug, name, day_reset_hour, is_active, is_paused, created_at';
+  'id, slug, name, doctor_name, specialty, area, city, address, timings, is_listed, day_reset_hour, is_active, is_paused, created_at';
+
+// What anyone may see about a listed clinic on the public homepage
+const CLINIC_LISTING_FIELDS =
+  'slug, name, doctor_name, specialty, area, city, address, timings, is_paused';
 
 function newAccessToken() {
   return crypto.randomBytes(16).toString('hex');
@@ -57,10 +61,23 @@ async function listClinics() {
   return data;
 }
 
-async function createClinic({ slug, name, pinHash, dayResetHour }) {
+// Active clinics that chose to appear in public search
+async function listListedClinics() {
   const { data, error } = await supabase
     .from('clinics')
-    .insert({ slug, name, pin_hash: pinHash, day_reset_hour: dayResetHour })
+    .select(CLINIC_LISTING_FIELDS)
+    .eq('is_active', true)
+    .eq('is_listed', true)
+    .order('name', { ascending: true })
+    .limit(500);
+  if (error) throw error;
+  return data;
+}
+
+async function createClinic({ slug, name, pinHash, dayResetHour, listing = {} }) {
+  const { data, error } = await supabase
+    .from('clinics')
+    .insert({ slug, name, pin_hash: pinHash, day_reset_hour: dayResetHour, ...listing })
     .select(CLINIC_ADMIN_FIELDS)
     .single();
   if (error) throw error;
@@ -440,6 +457,7 @@ module.exports = {
   getClinicBySlug,
   getClinicById,
   listClinics,
+  listListedClinics,
   createClinic,
   updateClinic,
   setQueuePausedStatus,
