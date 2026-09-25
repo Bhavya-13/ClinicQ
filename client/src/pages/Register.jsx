@@ -36,7 +36,9 @@ export default function Register() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      navigate(`/c/${slug}/token/${data.patient.access_token}`, { state: { existing: data.existing } });
+      navigate(`/c/${slug}/token/${data.patient.access_token}`, {
+        state: { existing: data.existing, rejoined: data.rejoined },
+      });
     } catch (err) {
       setError(err.message || 'Registration failed.');
     } finally {

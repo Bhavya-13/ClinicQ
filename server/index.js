@@ -329,14 +329,28 @@ clinicRouter.post('/register', async (req, res) => {
     if (!n || n < 1 || n > 10)
       return res.status(400).json({ error: 'Invalid number of patients' });
 
+    // 1. Accidental double-tap: the same person just registered — give back the same token
     const existing = await db.findActivePatientByName(req.clinic, name, n);
     if (existing) {
-      return res.json({ success: true, patient: existing, existing: true });
+      return res.json({ success: true, patient: existing, existing: true, rejoined: false });
     }
 
+    // 2. Skipped recently and registering again — treat it as a rejoin
+    const recentlySkipped = await db.findRecentlySkippedByName(req.clinic, name, n);
+    if (recentlySkipped) {
+      const patient = await db.rejoinSkippedPatient(req.clinic, recentlySkipped);
+      if (patient) {
+        // The old token page (if still open) switches to "no longer active"
+        io.to(roomFor(req.clinic.id)).emit('patient-replaced', { patientId: recentlySkipped.id });
+        await broadcast(req.clinic);
+        return res.json({ success: true, patient, existing: false, rejoined: true });
+      }
+    }
+
+    // 3. Brand-new registration
     const patient = await db.registerPatient(req.clinic, [name], n);
     await broadcast(req.clinic);
-    res.json({ success: true, patient, existing: false });
+    res.json({ success: true, patient, existing: false, rejoined: false });
   } catch (err) {
     console.error('❌ register error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -393,7 +407,11 @@ clinicRouter.post('/rejoin/:accessToken', async (req, res) => {
       return res.status(403).json({ error: 'Registration is currently paused. Please check back shortly.' });
     }
     const patient = await db.rejoinQueue(req.clinic, req.params.accessToken);
-    if (!patient) return res.status(400).json({ error: 'Cannot rejoin' });
+    if (!patient) {
+      return res.status(400).json({
+        error: 'This token can no longer rejoin. If you registered again, please use your new token.',
+      });
+    }
     await broadcast(req.clinic);
     res.json({ success: true, patient });
   } catch (err) {

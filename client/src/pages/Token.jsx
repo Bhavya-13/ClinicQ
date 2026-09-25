@@ -42,6 +42,7 @@ export default function Token() {
   const navigate = useNavigate();
   const location = useLocation();
   const isExisting = location.state?.existing;
+  const cameBackAfterSkip = location.state?.rejoined;
 
   const [patient, setPatient] = useState(null);
   const [fullQueue, setFullQueue] = useState([]);
@@ -111,6 +112,13 @@ export default function Token() {
     const onCheckin = ({ patientId }) => {
       if (patient && patientId === patient.id) setCheckedIn(true);
     };
+    // This person registered again after being skipped — this old token is closed
+    const onReplaced = ({ patientId }) => {
+      if (patient && patientId === patient.id) {
+        setPatient(prev => ({ ...prev, status: 'done', checkin_status: 'replaced' }));
+        setWasSkipped(false);
+      }
+    };
 
     socket.on('full-queue-updated', setFullQueue);
     socket.on('skipped-list-updated', setSkippedList);
@@ -118,6 +126,7 @@ export default function Token() {
     socket.on('patient-called', onCalled);
     socket.on('patient-skipped', onSkipped);
     socket.on('checkin-confirmed', onCheckin);
+    socket.on('patient-replaced', onReplaced);
 
     return () => {
       socket.off('full-queue-updated', setFullQueue);
@@ -126,6 +135,7 @@ export default function Token() {
       socket.off('patient-called', onCalled);
       socket.off('patient-skipped', onSkipped);
       socket.off('checkin-confirmed', onCheckin);
+      socket.off('patient-replaced', onReplaced);
     };
   }, [patient, socket]);
 
@@ -152,6 +162,7 @@ export default function Token() {
       } else {
         setActionError(data.error || 'Could not rejoin the queue.');
         setRejoining(false);
+        fetchPatient(); // show this token's real status
       }
     } catch {
       setActionError('Could not reach the clinic. Please try again.');
@@ -172,16 +183,18 @@ export default function Token() {
     return `~${m} min`;
   };
 
-  const isSkipped = (patient?.status === 'skipped' || wasSkipped) && !rejoining;
+  const isReplaced = patient?.status === 'done' && patient?.checkin_status === 'replaced';
+  const isSkipped = (patient?.status === 'skipped' || wasSkipped) && !rejoining && !isReplaced;
   const isRejoined = patient?.checkin_status === 'rejoined';
   const isCalled = patient?.status === 'called';
   const isWaiting = patient?.status === 'waiting';
-  const isDone = patient?.status === 'done';
+  const isDone = patient?.status === 'done' && !isReplaced;
   const registeredAt = formatRegisteredAt(patient?.created_at);
 
   const S = {
     page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '16px', boxSizing: 'border-box', width: '100%', overflowX: 'hidden' },
     card: { background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box' },
+    badge: { fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' },
   };
 
   if (loading) return (
@@ -213,7 +226,15 @@ export default function Token() {
 
         <TopBar clinicName={clinic.name} />
 
-        {isExisting && (
+        {cameBackAfterSkip && !isReplaced && (
+          <div style={{ background: 'linear-gradient(135deg,#e67e22,#f39c12)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
+            <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0, lineHeight: 1.45 }}>
+              Welcome back! You were skipped earlier, so you've rejoined at the end of the queue.
+            </p>
+          </div>
+        )}
+
+        {isExisting && !cameBackAfterSkip && (
           <div style={{ background: 'linear-gradient(135deg,#0984e3,#74b9ff)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
             <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0 }}>
               Welcome back! You already have an active token today.
@@ -224,6 +245,22 @@ export default function Token() {
         {actionError && (
           <div style={{ background: '#fff0f0', border: '1.5px solid #ffcccc', borderRadius: '14px', padding: '12px 16px', marginBottom: '16px' }}>
             <p style={{ margin: 0, fontSize: '13px', color: '#cc0000' }}>{actionError}</p>
+          </div>
+        )}
+
+        {isReplaced && (
+          <div style={{ background: 'white', border: '2px solid #e3e9f1', borderRadius: '20px', padding: '22px', marginBottom: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '26px', marginBottom: '8px' }}>🔁</div>
+            <p style={{ color: '#1e3a5f', fontWeight: '800', fontSize: '17px', margin: '0 0 6px' }}>This token is no longer active</p>
+            <p style={{ color: '#6b7684', fontSize: '13px', margin: '0 0 16px', lineHeight: 1.5 }}>
+              You rejoined the queue with a newer token. Please use that one. If you no longer have it, you can join the queue again.
+            </p>
+            <button
+              onClick={() => navigate(`/c/${slug}/register`)}
+              style={{ width: '100%', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '12px', padding: '13px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}
+            >
+              Join the Queue
+            </button>
           </div>
         )}
 
@@ -256,7 +293,7 @@ export default function Token() {
             <div style={{ fontSize: '28px', marginBottom: '8px' }}>⏰</div>
             <p style={{ color: 'white', fontWeight: '800', fontSize: '18px', margin: '0 0 6px' }}>You were skipped</p>
             <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', margin: '0 0 16px' }}>
-              {patient?.skip_reason === 'manual'
+              {patient.skip_reason === 'manual'
                 ? 'The clinic skipped your turn. Please rejoin the queue.'
                 : 'You did not check in within the time limit.'}
             </p>
@@ -267,7 +304,7 @@ export default function Token() {
           </div>
         )}
 
-        <div style={{ background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', border: '2px dashed #e8eef5', boxSizing: 'border-box' }}>
+        <div style={{ background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', border: '2px dashed #e8eef5', boxSizing: 'border-box', opacity: isReplaced ? 0.55 : 1 }}>
 
           <p style={{ textAlign: 'center', fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '4px' }}>
             Token Number
@@ -290,24 +327,13 @@ export default function Token() {
           )}
 
           <div style={{ textAlign: 'center', marginTop: '10px' }}>
-            {isRejoined && (
-              <span style={{ background: '#fff3e0', color: '#e67e22', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Rejoined at end of queue</span>
-            )}
-            {isSkipped && (
-              <span style={{ background: '#fff0f0', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Skipped</span>
-            )}
-            {isCalled && !checkedIn && (
-              <span style={{ background: '#fff8e1', color: '#f39c12', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Called</span>
-            )}
-            {isCalled && checkedIn && (
-              <span style={{ background: '#e8f8f5', color: '#00b894', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Checked In</span>
-            )}
-            {isWaiting && !isRejoined && (
-              <span style={{ background: '#f0f7ff', color: '#2d6a9f', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Waiting</span>
-            )}
-            {isDone && (
-              <span style={{ background: '#f0fff4', color: '#27ae60', fontSize: '12px', fontWeight: '700', padding: '4px 12px', borderRadius: '20px' }}>Done</span>
-            )}
+            {isReplaced && <span style={{ ...S.badge, background: '#f0f0f0', color: '#888' }}>Replaced by a newer token</span>}
+            {isRejoined && !isCalled && <span style={{ ...S.badge, background: '#fff3e0', color: '#e67e22' }}>Rejoined at end of queue</span>}
+            {isSkipped && <span style={{ ...S.badge, background: '#fff0f0', color: '#e74c3c' }}>Skipped</span>}
+            {isCalled && !checkedIn && <span style={{ ...S.badge, background: '#fff8e1', color: '#f39c12' }}>Called</span>}
+            {isCalled && checkedIn && <span style={{ ...S.badge, background: '#e8f8f5', color: '#00b894' }}>Checked In</span>}
+            {isWaiting && !isRejoined && <span style={{ ...S.badge, background: '#f0f7ff', color: '#2d6a9f' }}>Waiting</span>}
+            {isDone && <span style={{ ...S.badge, background: '#f0fff4', color: '#27ae60' }}>Done</span>}
           </div>
 
           <div style={{ margin: '16px -24px', borderTop: '2px dashed #f0f4f8', position: 'relative' }}>

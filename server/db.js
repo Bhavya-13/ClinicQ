@@ -328,7 +328,12 @@ async function confirmCheckinById(clinicId, patientId) {
 async function forceSkip(clinicId, patientId) {
   const { data, error } = await supabase
     .from('patients')
-    .update({ status: 'skipped', checkin_status: 'skipped', skip_reason: 'manual' })
+    .update({
+      status: 'skipped',
+      checkin_status: 'skipped',
+      skip_reason: 'manual',
+      skipped_at: new Date().toISOString(),
+    })
     .eq('clinic_id', clinicId)
     .eq('id', patientId)
     .eq('status', 'called')
@@ -341,25 +346,25 @@ async function forceSkip(clinicId, patientId) {
 // Auto-skip every called patient (in any clinic) whose check-in time has run out.
 // One atomic update, so it's safe even if two servers run it at once.
 async function sweepExpiredCheckins() {
+  const now = new Date().toISOString();
   const { data, error } = await supabase
     .from('patients')
-    .update({ status: 'skipped', checkin_status: 'skipped', skip_reason: 'no_show' })
+    .update({ status: 'skipped', checkin_status: 'skipped', skip_reason: 'no_show', skipped_at: now })
     .eq('status', 'called')
     .eq('checkin_status', 'pending')
-    .lt('checkin_deadline', new Date().toISOString())
+    .lt('checkin_deadline', now)
     .select(PUBLIC_PATIENT_FIELDS);
   if (error) throw error;
   return data || [];
 }
 
-async function rejoinQueue(clinic, accessToken) {
-  const oldPatient = await getPatientByAccessToken(clinic.id, accessToken);
-  if (!oldPatient || oldPatient.status !== 'skipped') return null;
-
-  // Claim the old entry first, so double-tapping "Rejoin" can't create two new tokens
+// Closes a skipped entry and puts the same person at the end of today's queue.
+// Returns the new patient (with access_token), or null if the entry was already closed.
+async function rejoinSkippedPatient(clinic, oldPatient) {
+  // Claim the old entry first, so two rejoins at once can't create two new tokens
   const { data: claimed, error: claimError } = await supabase
     .from('patients')
-    .update({ status: 'done' })
+    .update({ status: 'done', checkin_status: 'replaced' })
     .eq('id', oldPatient.id)
     .eq('status', 'skipped')
     .select('id')
@@ -387,6 +392,37 @@ async function rejoinQueue(clinic, accessToken) {
 
   if (insertError) throw insertError;
   return newPatient;
+}
+
+// "Rejoin Queue" button on the patient's own token page
+async function rejoinQueue(clinic, accessToken) {
+  const oldPatient = await getPatientByAccessToken(clinic.id, accessToken);
+  if (!oldPatient || oldPatient.status !== 'skipped') return null;
+  return rejoinSkippedPatient(clinic, oldPatient);
+}
+
+const RECENT_SKIP_MINUTES = 30;
+
+// Someone skipped in the last 30 minutes with the same name and group size.
+// Used so that registering again counts as a rejoin instead of a brand-new entry.
+async function findRecentlySkippedByName(clinic, name, numPatients) {
+  const queue = await getTodayQueue(clinic);
+  const normalized = name.trim().toLowerCase();
+  const since = new Date(Date.now() - RECENT_SKIP_MINUTES * 60 * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from('patients')
+    .select('*')
+    .eq('queue_id', queue.id)
+    .eq('status', 'skipped')
+    .gte('skipped_at', since)
+    .order('skipped_at', { ascending: false });
+  if (error) throw error;
+
+  return data.find(p =>
+    p.names?.[0]?.trim().toLowerCase() === normalized &&
+    p.num_patients === numPatients
+  ) || null;
 }
 
 async function markDone(clinicId, patientId) {
@@ -473,6 +509,8 @@ module.exports = {
   forceSkip,
   sweepExpiredCheckins,
   rejoinQueue,
+  rejoinSkippedPatient,
+  findRecentlySkippedByName,
   markDone,
   findActivePatientByName,
 };
