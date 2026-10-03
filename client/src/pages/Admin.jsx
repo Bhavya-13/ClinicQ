@@ -22,6 +22,15 @@ export default function Admin() {
   const [isPaused, setIsPaused] = useState(clinic.isPaused);
   const [pauseLoading, setPauseLoading] = useState(false);
 
+  // Walk-in form
+  const [walkName, setWalkName] = useState('');
+  const [walkCount, setWalkCount] = useState(1);
+  const [walkLoading, setWalkLoading] = useState(false);
+  const [walkResult, setWalkResult] = useState({ type: '', text: '' });
+
+  // Recall
+  const [recallingId, setRecallingId] = useState(null);
+
   // ── Staff auth ──────────────────────────────────────────────────────
   const [pin, setPin] = useState('');
   const [authed, setAuthed] = useState(false);
@@ -122,11 +131,15 @@ export default function Admin() {
       setMessage(`Token #${p.token_number} (${formatNames(p.names)}) was ${reasonText}.`);
       setCalledPatient(null);
     };
+    const onCancelled = (p) => {
+      setMessage(`Token #${p.token_number} (${formatNames(p.names)}) was cancelled by the patient.`);
+    };
 
     socket.on('full-queue-updated', onQueue);
     socket.on('skipped-list-updated', setSkippedList);
     socket.on('patient-called', onCalled);
     socket.on('auto-skip-occurred', onAutoSkip);
+    socket.on('patient-cancelled', onCancelled);
     socket.on('queue-paused-updated', setIsPaused);
 
     return () => {
@@ -134,6 +147,7 @@ export default function Admin() {
       socket.off('skipped-list-updated', setSkippedList);
       socket.off('patient-called', onCalled);
       socket.off('auto-skip-occurred', onAutoSkip);
+      socket.off('patient-cancelled', onCancelled);
       socket.off('queue-paused-updated', setIsPaused);
     };
   }, [socket]);
@@ -179,6 +193,60 @@ export default function Admin() {
     }
   };
 
+  // Bring a skipped patient back as next in line
+  const handleRecall = async (patient) => {
+    if (recallingId) return;
+    setRecallingId(patient.id);
+    setMessage('');
+    try {
+      const res = await adminFetch(`/admin/recall/${patient.id}`, { method: 'POST' });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        setMessage(`Token #${patient.token_number} (${formatNames(patient.names)}) recalled — they are next in line.`);
+      } else {
+        setMessage(data.message || 'Could not recall this patient.');
+      }
+    } catch (err) {
+      setMessage('Something went wrong. Please try again.');
+      console.error(err);
+    } finally {
+      setRecallingId(null);
+    }
+  };
+
+  // Add a patient who has no phone
+  const handleWalkIn = async (e) => {
+    e.preventDefault();
+    if (walkLoading) return;
+    setWalkLoading(true);
+    setWalkResult({ type: '', text: '' });
+    try {
+      const res = await adminFetch('/admin/walkin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: walkName, numPatients: walkCount }),
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        setWalkResult({
+          type: 'ok',
+          text: `Token #${data.patient.token_number} added for ${formatNames(data.patient.names)}. Give them this number.`,
+        });
+        setWalkName('');
+        setWalkCount(1);
+      } else {
+        setWalkResult({ type: 'error', text: data.message || data.error || 'Could not add the patient.' });
+      }
+    } catch (err) {
+      setWalkResult({ type: 'error', text: 'Something went wrong. Please try again.' });
+      console.error(err);
+    } finally {
+      setWalkLoading(false);
+    }
+  };
+
   // ── Derived state ───────────────────────────────────────────────────
   const waitingQueue = fullQueue.filter(p => p.status === 'waiting');
   const queueEmpty = waitingQueue.length === 0 && !calledPatient;
@@ -206,6 +274,7 @@ export default function Admin() {
     page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px', boxSizing: 'border-box' },
     card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box' },
     pill: { padding: '8px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: '700' },
+    smallInput: { border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '12px', padding: '11px 12px', fontSize: '14px', color: '#1a1a2e', outline: 'none', boxSizing: 'border-box' },
   };
 
   if (checkingAuth) {
@@ -293,7 +362,7 @@ export default function Admin() {
 
         {isPaused && (
           <div style={{ background: '#fff3e0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px' }}>⏸ Registrations are currently paused. Patients cannot join the queue.</p>
+            <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px' }}>⏸ Online registrations are paused. Patients cannot join by themselves — you can still add walk-in patients below.</p>
           </div>
         )}
 
@@ -303,9 +372,9 @@ export default function Admin() {
           </div>
         )}
 
-        <div className="cq-admin-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+        <div className="cq-admin-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px', alignItems: 'start' }}>
 
-          {/* ── QR Code ── */}
+          {/* ── QR Code + Walk-in ── */}
           <div style={{ ...S.card, textAlign: 'center' }}>
             <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#ddd', textTransform: 'uppercase', margin: '0 0 4px' }}>
               Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
@@ -318,6 +387,42 @@ export default function Admin() {
             <p style={{ fontSize: '12px', color: '#bbb', marginTop: '12px', marginBottom: 0 }}>
               Display at clinic entrance
             </p>
+
+            <form onSubmit={handleWalkIn} style={{ marginTop: '22px', paddingTop: '18px', borderTop: '1px solid #eef1f5', textAlign: 'left' }}>
+              <h3 style={{ fontSize: '14px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 4px' }}>Add walk-in patient</h3>
+              <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 12px' }}>For patients without a phone. Works even while registrations are paused.</p>
+              <input
+                style={{ ...S.smallInput, width: '100%', marginBottom: '10px' }}
+                value={walkName}
+                maxLength={60}
+                onChange={e => setWalkName(e.target.value)}
+                placeholder="Name (optional)"
+              />
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <select
+                  style={{ ...S.smallInput, flex: '0 0 auto' }}
+                  value={walkCount}
+                  onChange={e => setWalkCount(Number(e.target.value))}
+                  aria-label="Number of people"
+                >
+                  {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
+                    <option key={n} value={n}>{n} {n === 1 ? 'person' : 'people'}</option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  disabled={walkLoading}
+                  style={{ flex: 1, background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '11px', fontSize: '14px', fontWeight: '700', cursor: walkLoading ? 'not-allowed' : 'pointer', opacity: walkLoading ? 0.7 : 1 }}
+                >
+                  {walkLoading ? 'Adding...' : 'Add to queue'}
+                </button>
+              </div>
+              {walkResult.text && (
+                <p style={{ margin: '12px 0 0', fontSize: '13px', fontWeight: '600', color: walkResult.type === 'ok' ? '#00a37a' : '#cc0000' }}>
+                  {walkResult.text}
+                </p>
+              )}
+            </form>
           </div>
 
           {/* ── Current Patient + Buttons ── */}
@@ -428,7 +533,7 @@ export default function Admin() {
                       <p style={{ margin: '0 0 2px', fontWeight: '600', color: '#333', fontSize: '15px' }}>{formatNames(p.names)}</p>
                       <p style={{ margin: 0, fontSize: '12px', color: '#bbb' }}>
                         Group of {p.num_patients} · {new Date(p.created_at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })}
-                        {p.checkin_status === 'rejoined' && <span style={{ color: '#e67e22', marginLeft: '6px' }}>· Rejoined</span>}
+                        {p.checkin_status === 'rejoined' && <span style={{ color: '#e67e22', marginLeft: '6px' }}>· Back after skip</span>}
                       </p>
                     </div>
                   </div>
@@ -444,7 +549,10 @@ export default function Admin() {
         {/* ── Skipped ── */}
         {skippedList.length > 0 && (
           <div style={S.card}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Skipped (No-shows)</h2>
+            <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>Skipped (No-shows)</h2>
+            <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 16px' }}>
+              If a skipped patient is at the counter, tap Recall to make them next in line.
+            </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {skippedList.map(p => (
                 <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', padding: '14px 18px', borderRadius: '14px', background: '#fff5f5', border: '1.5px solid #ffd5d5' }}>
@@ -455,7 +563,16 @@ export default function Admin() {
                       <p style={{ margin: 0, fontSize: '12px', color: '#bbb' }}>Group of {p.num_patients}</p>
                     </div>
                   </div>
-                  <span style={{ background: '#ffd5d5', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '6px 14px', borderRadius: '20px' }}>No-show</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <span style={{ background: '#ffd5d5', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '6px 14px', borderRadius: '20px' }}>No-show</span>
+                    <button
+                      onClick={() => handleRecall(p)}
+                      disabled={recallingId !== null}
+                      style={{ background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '6px 14px', fontSize: '13px', fontWeight: '700', cursor: recallingId !== null ? 'not-allowed' : 'pointer', opacity: recallingId === p.id ? 0.6 : 1 }}
+                    >
+                      {recallingId === p.id ? 'Recalling...' : '↩ Recall'}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
