@@ -22,9 +22,9 @@ export default function Admin() {
   const [isPaused, setIsPaused] = useState(clinic.isPaused);
   const [pauseLoading, setPauseLoading] = useState(false);
 
-  // Walk-in form
+  // Walk-in form (people count is typed as text so the box can be emptied while typing)
   const [walkName, setWalkName] = useState('');
-  const [walkCount, setWalkCount] = useState(1);
+  const [walkCount, setWalkCount] = useState('1');
   const [walkLoading, setWalkLoading] = useState(false);
   const [walkResult, setWalkResult] = useState({ type: '', text: '' });
 
@@ -215,17 +215,29 @@ export default function Admin() {
     }
   };
 
+  // Only digits, at most 2 characters
+  const handleWalkCountChange = (e) => {
+    setWalkCount(e.target.value.replace(/\D/g, '').slice(0, 2));
+  };
+
   // Add a patient who has no phone
   const handleWalkIn = async (e) => {
     e.preventDefault();
     if (walkLoading) return;
+
+    const count = walkCount === '' ? 1 : parseInt(walkCount, 10);
+    if (!Number.isInteger(count) || count < 1 || count > 10) {
+      setWalkResult({ type: 'error', text: 'Number of people must be from 1 to 10.' });
+      return;
+    }
+
     setWalkLoading(true);
     setWalkResult({ type: '', text: '' });
     try {
       const res = await adminFetch('/admin/walkin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: walkName, numPatients: walkCount }),
+        body: JSON.stringify({ name: walkName, numPatients: count }),
       });
       if (!res) return;
       const data = await res.json();
@@ -235,7 +247,7 @@ export default function Admin() {
           text: `Token #${data.patient.token_number} added for ${formatNames(data.patient.names)}. Give them this number.`,
         });
         setWalkName('');
-        setWalkCount(1);
+        setWalkCount('1');
       } else {
         setWalkResult({ type: 'error', text: data.message || data.error || 'Could not add the patient.' });
       }
@@ -274,7 +286,8 @@ export default function Admin() {
     page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px', boxSizing: 'border-box' },
     card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box' },
     pill: { padding: '8px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: '700' },
-    smallInput: { border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '12px', padding: '11px 12px', fontSize: '14px', color: '#1a1a2e', outline: 'none', boxSizing: 'border-box' },
+    // 16px text stops iPhones from zooming in when a field is tapped
+    input: { border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '12px', padding: '12px 14px', fontSize: '16px', color: '#1a1a2e', outline: 'none', boxSizing: 'border-box', minHeight: '46px', fontFamily: 'inherit' },
   };
 
   if (checkingAuth) {
@@ -301,7 +314,7 @@ export default function Admin() {
             autoFocus
           />
           {pinError && <p style={{ color: '#e74c3c', fontSize: '13px', marginBottom: '12px' }}>{pinError}</p>}
-          <button type="submit" style={{ width: '100%', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '10px', padding: '12px', fontWeight: '700', cursor: 'pointer' }}>
+          <button type="submit" style={{ width: '100%', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '10px', padding: '12px', fontWeight: '700', cursor: 'pointer', minHeight: '46px' }}>
             Unlock
           </button>
         </form>
@@ -339,6 +352,7 @@ export default function Admin() {
                 color: isPaused ? '#d68910' : '#555',
                 border: `2px solid ${isPaused ? '#f39c12' : '#e0e0e0'}`,
                 cursor: pauseLoading ? 'not-allowed' : 'pointer',
+                minHeight: '40px',
               }}
             >
               {isPaused ? '▶ Resume Registrations' : '⏸ Pause Registrations'}
@@ -347,13 +361,13 @@ export default function Admin() {
               href={`/c/${slug}/display`}
               target="_blank"
               rel="noreferrer"
-              style={{ ...S.pill, background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', textDecoration: 'none' }}
+              style={{ ...S.pill, background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', textDecoration: 'none', minHeight: '40px', boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center' }}
             >
               📺 Display
             </a>
             <button
               onClick={() => lockDashboard()}
-              style={{ ...S.pill, background: 'white', color: '#888', border: '2px solid #e0e0e0', cursor: 'pointer' }}
+              style={{ ...S.pill, background: 'white', color: '#888', border: '2px solid #e0e0e0', cursor: 'pointer', minHeight: '40px' }}
             >
               🔒 Lock
             </button>
@@ -362,70 +376,19 @@ export default function Admin() {
 
         {isPaused && (
           <div style={{ background: '#fff3e0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px' }}>⏸ Online registrations are paused. Patients cannot join by themselves — you can still add walk-in patients below.</p>
+            <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px', lineHeight: 1.45 }}>⏸ Online registrations are paused. Patients cannot join by themselves — you can still add walk-in patients below.</p>
           </div>
         )}
 
         {message && (
           <div style={{ background: '#fffbf0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#d68910', fontWeight: '600', fontSize: '14px' }}>{message}</p>
+            <p style={{ margin: 0, color: '#d68910', fontWeight: '600', fontSize: '14px', lineHeight: 1.45 }}>{message}</p>
           </div>
         )}
 
         <div className="cq-admin-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px', alignItems: 'start' }}>
 
-          {/* ── QR Code + Walk-in ── */}
-          <div style={{ ...S.card, textAlign: 'center' }}>
-            <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#ddd', textTransform: 'uppercase', margin: '0 0 4px' }}>
-              Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
-            </p>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Scan to Join Queue</h2>
-            {qrCode
-              ? <img src={qrCode} alt="QR code to join the queue" style={{ width: '180px', height: '180px', borderRadius: '12px', maxWidth: '100%' }} />
-              : <div style={{ width: '180px', height: '180px', background: '#f0f4f8', borderRadius: '12px', margin: '0 auto', maxWidth: '100%' }} />
-            }
-            <p style={{ fontSize: '12px', color: '#bbb', marginTop: '12px', marginBottom: 0 }}>
-              Display at clinic entrance
-            </p>
-
-            <form onSubmit={handleWalkIn} style={{ marginTop: '22px', paddingTop: '18px', borderTop: '1px solid #eef1f5', textAlign: 'left' }}>
-              <h3 style={{ fontSize: '14px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 4px' }}>Add walk-in patient</h3>
-              <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 12px' }}>For patients without a phone. Works even while registrations are paused.</p>
-              <input
-                style={{ ...S.smallInput, width: '100%', marginBottom: '10px' }}
-                value={walkName}
-                maxLength={60}
-                onChange={e => setWalkName(e.target.value)}
-                placeholder="Name (optional)"
-              />
-              <div style={{ display: 'flex', gap: '10px' }}>
-                <select
-                  style={{ ...S.smallInput, flex: '0 0 auto' }}
-                  value={walkCount}
-                  onChange={e => setWalkCount(Number(e.target.value))}
-                  aria-label="Number of people"
-                >
-                  {Array.from({ length: 10 }, (_, i) => i + 1).map(n => (
-                    <option key={n} value={n}>{n} {n === 1 ? 'person' : 'people'}</option>
-                  ))}
-                </select>
-                <button
-                  type="submit"
-                  disabled={walkLoading}
-                  style={{ flex: 1, background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '11px', fontSize: '14px', fontWeight: '700', cursor: walkLoading ? 'not-allowed' : 'pointer', opacity: walkLoading ? 0.7 : 1 }}
-                >
-                  {walkLoading ? 'Adding...' : 'Add to queue'}
-                </button>
-              </div>
-              {walkResult.text && (
-                <p style={{ margin: '12px 0 0', fontSize: '13px', fontWeight: '600', color: walkResult.type === 'ok' ? '#00a37a' : '#cc0000' }}>
-                  {walkResult.text}
-                </p>
-              )}
-            </form>
-          </div>
-
-          {/* ── Current Patient + Buttons ── */}
+          {/* ── Current Patient + Buttons (first, so it is at the top on phones) ── */}
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>
               {calledPatient ? 'Now Serving' : 'No Patient Called'}
@@ -439,7 +402,7 @@ export default function Admin() {
                     <span style={{ fontSize: '32px', color: '#e67e22' }}>R</span>
                   )}
                 </div>
-                <p style={{ fontSize: '20px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>
+                <p style={{ fontSize: '20px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px', wordBreak: 'break-word' }}>
                   {formatNames(calledPatient.names)}
                 </p>
                 <p style={{ fontSize: '13px', color: '#bbb', margin: '0 0 12px' }}>
@@ -472,7 +435,7 @@ export default function Admin() {
                 width: '100%', background: buttonBg(), color: loading || queueEmpty ? '#bbb' : 'white',
                 border: 'none', borderRadius: '14px', padding: '16px', fontSize: '16px', fontWeight: '800',
                 cursor: loading || queueEmpty ? 'not-allowed' : 'pointer', boxShadow: buttonShadow(),
-                transition: 'all 0.2s', letterSpacing: '0.3px',
+                transition: 'all 0.2s', letterSpacing: '0.3px', minHeight: '54px',
               }}
             >
               {buttonLabel()}
@@ -484,7 +447,7 @@ export default function Admin() {
                   <button
                     onClick={handleManualCheckin}
                     disabled={loading}
-                    style={{ flex: '1 1 140px', background: 'white', color: '#27ae60', border: '2px solid #d5f5e3', borderRadius: '14px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer' }}
+                    style={{ flex: '1 1 140px', background: 'white', color: '#27ae60', border: '2px solid #d5f5e3', borderRadius: '14px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', minHeight: '48px' }}
                   >
                     Confirm Check-In Manually
                   </button>
@@ -492,7 +455,7 @@ export default function Admin() {
                 <button
                   onClick={handleSkip}
                   disabled={loading}
-                  style={{ flex: '1 1 140px', background: 'white', color: '#e74c3c', border: '2px solid #ffd5d5', borderRadius: '14px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer' }}
+                  style={{ flex: '1 1 140px', background: 'white', color: '#e74c3c', border: '2px solid #ffd5d5', borderRadius: '14px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', minHeight: '48px' }}
                 >
                   Skip This Patient
                 </button>
@@ -507,6 +470,73 @@ export default function Admin() {
                 </span>
               </div>
             )}
+          </div>
+
+          {/* ── Right column: Walk-in, then QR ── */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', minWidth: 0 }}>
+
+            {/* Walk-in */}
+            <form onSubmit={handleWalkIn} style={S.card}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>Add walk-in patient</h2>
+              <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 14px', lineHeight: 1.45 }}>
+                For patients without a phone. Works even while registrations are paused.
+              </p>
+
+              <input
+                style={{ ...S.input, width: '100%', marginBottom: '10px' }}
+                value={walkName}
+                maxLength={60}
+                onChange={e => setWalkName(e.target.value)}
+                placeholder="Name (optional)"
+                autoComplete="off"
+              />
+
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'stretch' }}>
+                <input
+                  style={{ ...S.input, flex: '0 0 96px', width: '96px', textAlign: 'center', fontWeight: '700' }}
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={walkCount}
+                  onChange={handleWalkCountChange}
+                  onFocus={e => e.target.select()}
+                  placeholder="1"
+                  aria-label="Number of people (1 to 10)"
+                  autoComplete="off"
+                />
+                <button
+                  type="submit"
+                  disabled={walkLoading}
+                  style={{ flex: '1 1 140px', background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '12px', fontSize: '15px', fontWeight: '700', cursor: walkLoading ? 'not-allowed' : 'pointer', opacity: walkLoading ? 0.7 : 1, minHeight: '46px' }}
+                >
+                  {walkLoading ? 'Adding...' : 'Add to queue'}
+                </button>
+              </div>
+              <p style={{ fontSize: '11px', color: '#b5bdc8', margin: '8px 0 0' }}>
+                Number of people: 1 to 10
+              </p>
+
+              {walkResult.text && (
+                <p style={{ margin: '12px 0 0', fontSize: '14px', fontWeight: '600', lineHeight: 1.45, color: walkResult.type === 'ok' ? '#00a37a' : '#cc0000' }}>
+                  {walkResult.text}
+                </p>
+              )}
+            </form>
+
+            {/* QR code */}
+            <div style={{ ...S.card, textAlign: 'center' }}>
+              <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#ddd', textTransform: 'uppercase', margin: '0 0 4px' }}>
+                Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
+              </p>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Scan to Join Queue</h2>
+              {qrCode
+                ? <img src={qrCode} alt="QR code to join the queue" style={{ width: '180px', height: '180px', borderRadius: '12px', maxWidth: '100%' }} />
+                : <div style={{ width: '180px', height: '180px', background: '#f0f4f8', borderRadius: '12px', margin: '0 auto', maxWidth: '100%' }} />
+              }
+              <p style={{ fontSize: '12px', color: '#bbb', marginTop: '12px', marginBottom: 0 }}>
+                Display at clinic entrance
+              </p>
+            </div>
           </div>
         </div>
 
@@ -524,13 +554,13 @@ export default function Admin() {
                   background: i === 0 ? '#f0f7ff' : p.checkin_status === 'rejoined' ? '#fff8f0' : '#f9f9f9',
                   border: `2px solid ${i === 0 ? '#2d6a9f' : p.checkin_status === 'rejoined' ? '#e67e22' : '#efefef'}`,
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
                     <span style={{ fontFamily: 'monospace', fontSize: '22px', fontWeight: '900', color: i === 0 ? '#1e3a5f' : '#ccc' }}>
                       #{p.token_number}
                       {p.checkin_status === 'rejoined' && <span style={{ color: '#e67e22', fontSize: '14px' }}>R</span>}
                     </span>
-                    <div>
-                      <p style={{ margin: '0 0 2px', fontWeight: '600', color: '#333', fontSize: '15px' }}>{formatNames(p.names)}</p>
+                    <div style={{ minWidth: 0 }}>
+                      <p style={{ margin: '0 0 2px', fontWeight: '600', color: '#333', fontSize: '15px', wordBreak: 'break-word' }}>{formatNames(p.names)}</p>
                       <p style={{ margin: 0, fontSize: '12px', color: '#bbb' }}>
                         Group of {p.num_patients} · {new Date(p.created_at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })}
                         {p.checkin_status === 'rejoined' && <span style={{ color: '#e67e22', marginLeft: '6px' }}>· Back after skip</span>}
@@ -550,25 +580,25 @@ export default function Admin() {
         {skippedList.length > 0 && (
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>Skipped (No-shows)</h2>
-            <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 16px' }}>
+            <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 16px', lineHeight: 1.45 }}>
               If a skipped patient is at the counter, tap Recall to make them next in line.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {skippedList.map(p => (
                 <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', padding: '14px 18px', borderRadius: '14px', background: '#fff5f5', border: '1.5px solid #ffd5d5' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
                     <span style={{ fontFamily: 'monospace', fontSize: '20px', fontWeight: '900', color: '#e74c3c' }}>#{p.token_number}</span>
-                    <div>
-                      <p style={{ margin: '0 0 2px', fontWeight: '600', color: '#555', fontSize: '14px' }}>{formatNames(p.names)}</p>
+                    <div style={{ minWidth: 0 }}>
+                      <p style={{ margin: '0 0 2px', fontWeight: '600', color: '#555', fontSize: '14px', wordBreak: 'break-word' }}>{formatNames(p.names)}</p>
                       <p style={{ margin: 0, fontSize: '12px', color: '#bbb' }}>Group of {p.num_patients}</p>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                     <span style={{ background: '#ffd5d5', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '6px 14px', borderRadius: '20px' }}>No-show</span>
                     <button
                       onClick={() => handleRecall(p)}
                       disabled={recallingId !== null}
-                      style={{ background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '6px 14px', fontSize: '13px', fontWeight: '700', cursor: recallingId !== null ? 'not-allowed' : 'pointer', opacity: recallingId === p.id ? 0.6 : 1 }}
+                      style={{ background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '8px 16px', fontSize: '14px', fontWeight: '700', cursor: recallingId !== null ? 'not-allowed' : 'pointer', opacity: recallingId === p.id ? 0.6 : 1, minHeight: '42px' }}
                     >
                       {recallingId === p.id ? 'Recalling...' : '↩ Recall'}
                     </button>
