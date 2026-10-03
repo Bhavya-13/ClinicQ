@@ -54,6 +54,9 @@ export default function Token() {
   const [wasSkipped, setWasSkipped] = useState(false);
   const [rejoining, setRejoining] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const fetchPatient = useCallback(() => {
     fetch(`${api}/patient/${accessToken}`)
@@ -70,6 +73,9 @@ export default function Token() {
     setWasSkipped(false);
     setRejoining(false);
     setActionError('');
+    setNotice('');
+    setConfirmCancel(false);
+    setCancelling(false);
 
     fetchPatient();
     fetch(`${api}/queue/full`)
@@ -99,6 +105,7 @@ export default function Token() {
     const onCalled = (called) => {
       if (patient && called.id === patient.id) {
         setPatient(prev => ({ ...prev, ...called }));
+        setNotice('');
         const deadline = new Date(called.checkin_deadline).getTime();
         setCountdown(Math.max(0, Math.floor((deadline - Date.now()) / 1000)));
       }
@@ -119,6 +126,24 @@ export default function Token() {
         setWasSkipped(false);
       }
     };
+    // The clinic brought this skipped patient back as next in line
+    const onRecalled = (recalled) => {
+      if (patient && recalled.id === patient.id) {
+        setPatient(prev => ({ ...prev, ...recalled }));
+        setWasSkipped(false);
+        setCheckedIn(false);
+        setCountdown(null);
+        setNotice("The clinic has brought you back into the queue. You're next in line — please stay nearby.");
+      }
+    };
+    // Cancelled (for example from another tab on the same phone)
+    const onCancelled = (cancelled) => {
+      if (patient && cancelled.id === patient.id) {
+        setPatient(prev => ({ ...prev, status: 'done', checkin_status: 'cancelled' }));
+        setConfirmCancel(false);
+        setCountdown(null);
+      }
+    };
 
     socket.on('full-queue-updated', setFullQueue);
     socket.on('skipped-list-updated', setSkippedList);
@@ -127,6 +152,8 @@ export default function Token() {
     socket.on('patient-skipped', onSkipped);
     socket.on('checkin-confirmed', onCheckin);
     socket.on('patient-replaced', onReplaced);
+    socket.on('patient-recalled', onRecalled);
+    socket.on('patient-cancelled', onCancelled);
 
     return () => {
       socket.off('full-queue-updated', setFullQueue);
@@ -136,6 +163,8 @@ export default function Token() {
       socket.off('patient-skipped', onSkipped);
       socket.off('checkin-confirmed', onCheckin);
       socket.off('patient-replaced', onReplaced);
+      socket.off('patient-recalled', onRecalled);
+      socket.off('patient-cancelled', onCancelled);
     };
   }, [patient, socket]);
 
@@ -170,6 +199,27 @@ export default function Token() {
     }
   };
 
+  const handleCancel = async () => {
+    setCancelling(true);
+    setActionError('');
+    try {
+      const res = await fetch(`${api}/cancel/${accessToken}`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setPatient(prev => ({ ...prev, status: 'done', checkin_status: 'cancelled' }));
+        setCountdown(null);
+      } else {
+        setActionError(data.reason || 'Could not cancel this token.');
+        fetchPatient(); // show this token's real status
+      }
+      setConfirmCancel(false);
+    } catch {
+      setActionError('Could not reach the clinic. Please try again.');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
   const activeQueue = fullQueue.filter(p => p.status === 'waiting' || p.status === 'called');
   const myIndex = patient ? activeQueue.findIndex(p => p.id === patient.id) : -1;
   const peopleAhead = activeQueue.slice(0, myIndex).reduce((sum, p) => sum + p.num_patients, 0);
@@ -184,11 +234,13 @@ export default function Token() {
   };
 
   const isReplaced = patient?.status === 'done' && patient?.checkin_status === 'replaced';
-  const isSkipped = (patient?.status === 'skipped' || wasSkipped) && !rejoining && !isReplaced;
+  const isCancelled = patient?.status === 'done' && patient?.checkin_status === 'cancelled';
+  const isSkipped = (patient?.status === 'skipped' || wasSkipped) && !rejoining && !isReplaced && !isCancelled;
   const isRejoined = patient?.checkin_status === 'rejoined';
   const isCalled = patient?.status === 'called';
   const isWaiting = patient?.status === 'waiting';
-  const isDone = patient?.status === 'done' && !isReplaced;
+  const isDone = patient?.status === 'done' && !isReplaced && !isCancelled;
+  const canCancel = isWaiting || (isCalled && !checkedIn);
   const registeredAt = formatRegisteredAt(patient?.created_at);
 
   const S = {
@@ -226,7 +278,7 @@ export default function Token() {
 
         <TopBar clinicName={clinic.name} />
 
-        {cameBackAfterSkip && !isReplaced && (
+        {cameBackAfterSkip && !isReplaced && !isCancelled && (
           <div style={{ background: 'linear-gradient(135deg,#e67e22,#f39c12)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
             <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0, lineHeight: 1.45 }}>
               Welcome back! You were skipped earlier, so you've rejoined at the end of the queue.
@@ -234,11 +286,17 @@ export default function Token() {
           </div>
         )}
 
-        {isExisting && !cameBackAfterSkip && (
+        {isExisting && !cameBackAfterSkip && !isCancelled && (
           <div style={{ background: 'linear-gradient(135deg,#0984e3,#74b9ff)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
             <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0 }}>
               Welcome back! You already have an active token today.
             </p>
+          </div>
+        )}
+
+        {notice && (
+          <div style={{ background: 'linear-gradient(135deg,#00b894,#00cec9)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
+            <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0, lineHeight: 1.45 }}>{notice}</p>
           </div>
         )}
 
@@ -260,6 +318,22 @@ export default function Token() {
               style={{ width: '100%', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '12px', padding: '13px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}
             >
               Join the Queue
+            </button>
+          </div>
+        )}
+
+        {isCancelled && (
+          <div style={{ background: 'white', border: '2px solid #e3e9f1', borderRadius: '20px', padding: '22px', marginBottom: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '26px', marginBottom: '8px' }}>🚫</div>
+            <p style={{ color: '#1e3a5f', fontWeight: '800', fontSize: '17px', margin: '0 0 6px' }}>Token cancelled</p>
+            <p style={{ color: '#6b7684', fontSize: '13px', margin: '0 0 16px', lineHeight: 1.5 }}>
+              You've left the queue and everyone behind you has moved up. If your plans change, you can join again.
+            </p>
+            <button
+              onClick={() => navigate(`/c/${slug}/register`)}
+              style={{ width: '100%', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '12px', padding: '13px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}
+            >
+              Join the Queue Again
             </button>
           </div>
         )}
@@ -304,7 +378,7 @@ export default function Token() {
           </div>
         )}
 
-        <div style={{ background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', border: '2px dashed #e8eef5', boxSizing: 'border-box', opacity: isReplaced ? 0.55 : 1 }}>
+        <div style={{ background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', border: '2px dashed #e8eef5', boxSizing: 'border-box', opacity: isReplaced || isCancelled ? 0.55 : 1 }}>
 
           <p style={{ textAlign: 'center', fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '4px' }}>
             Token Number
@@ -328,7 +402,10 @@ export default function Token() {
 
           <div style={{ textAlign: 'center', marginTop: '10px' }}>
             {isReplaced && <span style={{ ...S.badge, background: '#f0f0f0', color: '#888' }}>Replaced by a newer token</span>}
-            {isRejoined && !isCalled && <span style={{ ...S.badge, background: '#fff3e0', color: '#e67e22' }}>Rejoined at end of queue</span>}
+            {isCancelled && <span style={{ ...S.badge, background: '#f0f0f0', color: '#888' }}>Cancelled</span>}
+            {isRejoined && !isCalled && !isSkipped && !isReplaced && !isCancelled && (
+              <span style={{ ...S.badge, background: '#fff3e0', color: '#e67e22' }}>Back in the queue after a skip</span>
+            )}
             {isSkipped && <span style={{ ...S.badge, background: '#fff0f0', color: '#e74c3c' }}>Skipped</span>}
             {isCalled && !checkedIn && <span style={{ ...S.badge, background: '#fff8e1', color: '#f39c12' }}>Called</span>}
             {isCalled && checkedIn && <span style={{ ...S.badge, background: '#e8f8f5', color: '#00b894' }}>Checked In</span>}
@@ -388,6 +465,42 @@ export default function Token() {
           </p>
         </div>
 
+        {/* ── Cancel my token ── */}
+        {canCancel && (
+          <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+            {!confirmCancel ? (
+              <button
+                onClick={() => setConfirmCancel(true)}
+                style={{ background: 'none', border: 'none', color: '#8a94a3', fontSize: '13px', fontWeight: '600', textDecoration: 'underline', cursor: 'pointer', padding: '6px' }}
+              >
+                Can't make it? Cancel my token
+              </button>
+            ) : (
+              <div style={{ background: 'white', border: '2px solid #ffd5d5', borderRadius: '16px', padding: '16px', textAlign: 'center' }}>
+                <p style={{ margin: '0 0 12px', fontSize: '14px', color: '#444', lineHeight: 1.45 }}>
+                  Cancel token <strong>#{patient.token_number}</strong>? You'll lose your place, and everyone behind you will move up.
+                </p>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    onClick={() => setConfirmCancel(false)}
+                    disabled={cancelling}
+                    style={{ flex: 1, background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '11px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}
+                  >
+                    Keep my token
+                  </button>
+                  <button
+                    onClick={handleCancel}
+                    disabled={cancelling}
+                    style={{ flex: 1, background: '#e74c3c', color: 'white', border: 'none', borderRadius: '12px', padding: '11px', fontSize: '14px', fontWeight: '700', cursor: cancelling ? 'not-allowed' : 'pointer', opacity: cancelling ? 0.7 : 1 }}
+                  >
+                    {cancelling ? 'Cancelling...' : 'Yes, cancel'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={S.card}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: 0 }}>Live Queue</h2>
@@ -446,7 +559,7 @@ export default function Token() {
           {activeQueue.some(e => e.checkin_status === 'rejoined') && (
             <div style={{ marginTop: '12px', background: '#fff8f0', border: '1px solid #fde8d0', borderRadius: '10px', padding: '10px 14px' }}>
               <p style={{ margin: 0, fontSize: '12px', color: '#e67e22' }}>
-                <strong>R</strong> = This person was skipped earlier and rejoined at the end. They are not skipping the line.
+                <strong>R</strong> = This person was skipped earlier and has come back. They are not skipping the line.
               </p>
             </div>
           )}

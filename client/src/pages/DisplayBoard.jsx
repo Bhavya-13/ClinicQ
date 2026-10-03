@@ -255,7 +255,7 @@ export default function DisplayBoard() {
             <div style={{ background: '#fff8f0', border: '1.5px solid #fde8d0', borderRadius: '16px', padding: '16px' }}>
               <p style={{ color: '#e67e22', fontWeight: '700', fontSize: '13px', margin: '0 0 6px' }}>About R (Rejoined)</p>
               <p style={{ color: '#999', fontSize: '12px', margin: 0, lineHeight: 1.6 }}>
-                Patients marked <strong style={{ color: '#e67e22' }}>R</strong> were called but did not check in. They rejoined at the end and are <strong>not skipping</strong> the line.
+                Patients marked <strong style={{ color: '#e67e22' }}>R</strong> were skipped earlier and have come back. They are <strong>not skipping</strong> the line.
               </p>
             </div>
           )}

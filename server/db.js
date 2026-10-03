@@ -17,7 +17,7 @@ const CLINIC_UTC_OFFSET_MINUTES = 330;
 // Everything that may be shown publicly about a patient.
 // access_token is deliberately NOT included — it's the patient's private key.
 const PUBLIC_PATIENT_FIELDS =
-  'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at';
+  'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at, queue_order';
 
 const CLINIC_ADMIN_FIELDS =
   'id, slug, name, doctor_name, specialty, area, city, address, timings, is_listed, day_reset_hour, is_active, is_paused, created_at';
@@ -28,6 +28,25 @@ const CLINIC_LISTING_FIELDS =
 
 function newAccessToken() {
   return crypto.randomBytes(16).toString('hex');
+}
+
+// ── Queue order ───────────────────────────────────────────
+// Normally the order is the token number. A recalled patient gets a negative
+// queue_order (earlier recalls = smaller number), so they come before everyone
+// else who is waiting, while keeping their original token number.
+const RECALL_ORDER_BASE = 4000000000;
+
+function queuePosition(p) {
+  return p.queue_order !== null && p.queue_order !== undefined ? Number(p.queue_order) : p.token_number;
+}
+
+// The patient being served is always first; everyone else follows queue order
+function sortForQueue(list) {
+  return [...list].sort((a, b) => {
+    const calledA = a.status === 'called' ? 0 : 1;
+    const calledB = b.status === 'called' ? 0 : 1;
+    return calledA - calledB || queuePosition(a) - queuePosition(b) || a.token_number - b.token_number;
+  });
 }
 
 // ── Clinics ───────────────────────────────────────────────
@@ -218,7 +237,7 @@ async function getFullQueueDisplay(clinic) {
     .neq('status', 'done')
     .order('token_number', { ascending: true });
   if (error) throw error;
-  return data;
+  return sortForQueue(data);
 }
 
 async function getRecentlySkipped(clinic) {
@@ -259,16 +278,16 @@ async function getAvgMinutesPerPerson(clinicId) {
 
 async function callNext(clinic) {
   const queue = await getTodayQueue(clinic);
-  const { data: next, error } = await supabase
+  const { data: waiting, error } = await supabase
     .from('patients')
-    .select('id')
+    .select('id, token_number, queue_order')
     .eq('queue_id', queue.id)
-    .eq('status', 'waiting')
-    .order('token_number', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .eq('status', 'waiting');
   if (error) throw error;
-  if (!next) return null;
+  if (!waiting || waiting.length === 0) return null;
+
+  // Recalled patients come first, then token order
+  const next = sortForQueue(waiting)[0];
 
   const now = new Date();
   const deadline = new Date(now.getTime() + GRACE_PERIOD_SECONDS * 1000);
@@ -356,6 +375,55 @@ async function sweepExpiredCheckins() {
     .select(PUBLIC_PATIENT_FIELDS);
   if (error) throw error;
   return data || [];
+}
+
+// Staff bring a skipped patient back as next in line. They keep their token number.
+// Returns the patient (public fields), or null if they are no longer in the skipped list.
+async function recallSkippedPatient(clinic, patientId) {
+  const queue = await getTodayQueue(clinic);
+  const { data, error } = await supabase
+    .from('patients')
+    .update({
+      status: 'waiting',
+      checkin_status: 'rejoined',
+      skip_reason: null,
+      skipped_at: null,
+      called_at: null,
+      checkin_deadline: null,
+      // Negative = before every normal token. Earlier recalls get a smaller number,
+      // so if several people are recalled, the first recalled goes first.
+      queue_order: Math.floor(Date.now() / 1000) - RECALL_ORDER_BASE,
+    })
+    .eq('clinic_id', clinic.id)
+    .eq('queue_id', queue.id)
+    .eq('id', patientId)
+    .eq('status', 'skipped')
+    .select(PUBLIC_PATIENT_FIELDS)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// A patient cancels their own token (waiting, or called but not yet checked in).
+// Everyone behind them moves up. Not counted in the wait-time average.
+async function cancelPatientToken(clinicId, accessToken) {
+  const patient = await getPatientByAccessToken(clinicId, accessToken);
+  if (!patient) return { success: false, reason: 'Token not found' };
+  if (!['waiting', 'called'].includes(patient.status)) {
+    return { success: false, reason: 'This token is no longer active' };
+  }
+
+  const { data, error } = await supabase
+    .from('patients')
+    .update({ status: 'done', checkin_status: 'cancelled' })
+    .eq('id', patient.id)
+    .in('status', ['waiting', 'called'])
+    .select(PUBLIC_PATIENT_FIELDS)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return { success: false, reason: 'This token is no longer active' };
+
+  return { success: true, patient: data };
 }
 
 // Closes a skipped entry and puts the same person at the end of today's queue.
@@ -508,6 +576,8 @@ module.exports = {
   confirmCheckinById,
   forceSkip,
   sweepExpiredCheckins,
+  recallSkippedPatient,
+  cancelPatientToken,
   rejoinQueue,
   rejoinSkippedPatient,
   findRecentlySkippedByName,

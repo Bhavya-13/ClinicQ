@@ -68,7 +68,6 @@ async function broadcast(clinic) {
   room.emit('avg-updated', avg);
 }
 
-// ── Owner routes (you) — must be registered before the old /api mount ──
 // ── Clinic listing details (shown on the public homepage) ──
 const LISTING_FIELDS = {
   doctorName: { column: 'doctor_name', label: 'Doctor name', max: 80 },
@@ -401,6 +400,21 @@ clinicRouter.post('/checkin/:accessToken', async (req, res) => {
   }
 });
 
+// Patient cancels their own token — everyone behind them moves up
+clinicRouter.post('/cancel/:accessToken', async (req, res) => {
+  try {
+    const result = await db.cancelPatientToken(req.clinic.id, req.params.accessToken);
+    if (!result.success) return res.status(400).json(result);
+
+    io.to(roomFor(req.clinic.id)).emit('patient-cancelled', result.patient);
+    await broadcast(req.clinic);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ cancel error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 clinicRouter.post('/rejoin/:accessToken', async (req, res) => {
   try {
     if (req.clinic.is_paused) {
@@ -496,6 +510,53 @@ clinicRouter.post('/admin/checkin', requireClinicAdmin, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     console.error('❌ admin/checkin error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Staff bring a skipped patient back as next in line (they are at the counter)
+clinicRouter.post('/admin/recall/:id', requireClinicAdmin, async (req, res) => {
+  try {
+    const patientId = parseInt(req.params.id);
+    if (!Number.isInteger(patientId)) {
+      return res.status(400).json({ success: false, message: 'Invalid patient' });
+    }
+
+    const patient = await db.recallSkippedPatient(req.clinic, patientId);
+    if (!patient) {
+      return res.json({ success: false, message: 'That patient is no longer in the skipped list' });
+    }
+
+    io.to(roomFor(req.clinic.id)).emit('patient-recalled', patient);
+    await broadcast(req.clinic);
+    res.json({ success: true, patient });
+  } catch (err) {
+    console.error('❌ admin/recall error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Staff add a patient who has no phone. Works even while online registration is paused.
+clinicRouter.post('/admin/walkin', requireClinicAdmin, async (req, res) => {
+  try {
+    const rawName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (rawName.length > 60) return res.status(400).json({ success: false, message: 'Name is too long' });
+
+    const n = parseInt(req.body?.numPatients);
+    if (!n || n < 1 || n > 10) {
+      return res.status(400).json({ success: false, message: 'Number of people must be 1 to 10' });
+    }
+
+    const patient = await db.registerPatient(req.clinic, [rawName || 'Walk-in'], n);
+    await broadcast(req.clinic);
+
+    // Staff only need the number — the patient's private link is never returned here
+    res.status(201).json({
+      success: true,
+      patient: { token_number: patient.token_number, names: patient.names, num_patients: patient.num_patients },
+    });
+  } catch (err) {
+    console.error('❌ admin/walkin error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
