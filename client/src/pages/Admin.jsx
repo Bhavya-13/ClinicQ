@@ -28,9 +28,6 @@ export default function Admin() {
   const [walkLoading, setWalkLoading] = useState(false);
   const [walkResult, setWalkResult] = useState({ type: '', text: '' });
 
-  // Recall
-  const [recallingId, setRecallingId] = useState(null);
-
   // ── Staff auth ──────────────────────────────────────────────────────
   const [pin, setPin] = useState('');
   const [authed, setAuthed] = useState(false);
@@ -190,28 +187,6 @@ export default function Admin() {
       console.error(err);
     } finally {
       setPauseLoading(false);
-    }
-  };
-
-  // Bring a skipped patient back as next in line
-  const handleRecall = async (patient) => {
-    if (recallingId) return;
-    setRecallingId(patient.id);
-    setMessage('');
-    try {
-      const res = await adminFetch(`/admin/recall/${patient.id}`, { method: 'POST' });
-      if (!res) return;
-      const data = await res.json();
-      if (data.success) {
-        setMessage(`Token #${patient.token_number} (${formatNames(patient.names)}) recalled — they are next in line.`);
-      } else {
-        setMessage(data.message || 'Could not recall this patient.');
-      }
-    } catch (err) {
-      setMessage('Something went wrong. Please try again.');
-      console.error(err);
-    } finally {
-      setRecallingId(null);
     }
   };
 
@@ -576,12 +551,12 @@ export default function Admin() {
           )}
         </div>
 
-        {/* ── Skipped ── */}
+        {/* ── Skipped (information only) ── */}
         {skippedList.length > 0 && (
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>Skipped (No-shows)</h2>
             <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 16px', lineHeight: 1.45 }}>
-              If a skipped patient is at the counter, tap Recall to make them next in line.
+              Skipped patients can rejoin from their own token page. They go to the end of the queue.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {skippedList.map(p => (
@@ -593,16 +568,7 @@ export default function Admin() {
                       <p style={{ margin: 0, fontSize: '12px', color: '#bbb' }}>Group of {p.num_patients}</p>
                     </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                    <span style={{ background: '#ffd5d5', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '6px 14px', borderRadius: '20px' }}>No-show</span>
-                    <button
-                      onClick={() => handleRecall(p)}
-                      disabled={recallingId !== null}
-                      style={{ background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '8px 16px', fontSize: '14px', fontWeight: '700', cursor: recallingId !== null ? 'not-allowed' : 'pointer', opacity: recallingId === p.id ? 0.6 : 1, minHeight: '42px' }}
-                    >
-                      {recallingId === p.id ? 'Recalling...' : '↩ Recall'}
-                    </button>
-                  </div>
+                  <span style={{ background: '#ffd5d5', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '6px 14px', borderRadius: '20px' }}>No-show</span>
                 </div>
               ))}
             </div>
