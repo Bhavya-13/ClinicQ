@@ -1,10 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import SERVER from '../config';
 
 const TOKEN_KEY = 'cq_owner_token';
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const PIN_PATTERN = /^\d{6,12}$/;
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
 // Listing fields: form key → database column, label, max length, placeholder
 const LISTING_INPUTS = [
@@ -33,6 +32,8 @@ function slugify(text) {
     .replace(/-+$/, '');
 }
 
+const pad2 = (n) => String(n).padStart(2, '0');
+
 function formatHour(h) {
   const suffix = h < 12 ? 'AM' : 'PM';
   const hour = h % 12 === 0 ? 12 : h % 12;
@@ -45,8 +46,12 @@ const WEEK_DAYS = [
   { n: 1, label: 'Mon' }, { n: 2, label: 'Tue' }, { n: 3, label: 'Wed' }, { n: 4, label: 'Thu' },
   { n: 5, label: 'Fri' }, { n: 6, label: 'Sat' }, { n: 0, label: 'Sun' },
 ];
-const OPEN_BEFORE_OPTIONS = [0, 30, 60, 90, 120, 180, 240];
-const CLOSE_BEFORE_OPTIONS = [0, 15, 30, 45, 60, 90];
+
+// The two quick choices for "booking opens / closes" (anything else is a custom time)
+const OPEN_QUICK = [60, 120];   // minutes before the session starts
+const CLOSE_QUICK = [30, 60];   // minutes before the session ends
+const OPEN_MAX = 720;           // custom: up to 12 hours before the start
+const CLOSE_MAX = 240;          // custom: up to 4 hours before the end
 
 const DEFAULT_NEW_SESSIONS = [
   { name: 'Morning', startTime: '09:00', endTime: '13:00' },
@@ -59,16 +64,10 @@ function newSession(existing) {
   return { ...base, opensBeforeMin: 120, closesBeforeMin: 30, closedDays: [] };
 }
 
-// 0 → "At the time", 30 → "30 min", 90 → "1.5 hr", 120 → "2 hr"
-function shortMinutes(m) {
-  if (m === 0) return 'Right at';
-  if (m < 60) return `${m} min`;
-  return `${+(m / 60).toFixed(2)} hr`;
-}
-
-// If a saved value isn't one of the usual choices, still show it (selected)
-function optionsWith(list, value) {
-  return list.includes(value) ? list : [...list, value].sort((a, b) => a - b);
+// 30 → "30 min before", 120 → "2 hr before"
+function leadLabel(m) {
+  if (m < 60) return `${m} min before`;
+  return `${+(m / 60).toFixed(2)} hr before`;
 }
 
 function toMinutes(time) {
@@ -76,11 +75,16 @@ function toMinutes(time) {
   return Number.isInteger(h) && Number.isInteger(m) ? h * 60 + m : null;
 }
 
+function minutesToHHMM(min) {
+  const m = ((min % DAY_MIN) + DAY_MIN) % DAY_MIN;
+  return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+}
+
 function formatMinutes(min) {
   const m = ((min % DAY_MIN) + DAY_MIN) % DAY_MIN;
   const h = Math.floor(m / 60);
   const hour = h % 12 === 0 ? 12 : h % 12;
-  return `${hour}:${String(m % 60).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+  return `${hour}:${pad2(m % 60)} ${h < 12 ? 'AM' : 'PM'}`;
 }
 
 function formatTime(time) {
@@ -122,21 +126,11 @@ function sessionSummary(clinic) {
     .join(' · ');
 }
 
-// Small down-arrow used by the dropdown
-const CHEVRON =
-  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%232d6a9f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")";
-
 const S = {
   page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px', boxSizing: 'border-box' },
   card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box', marginBottom: '20px' },
   label: { display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px' },
   input: { width: '100%', border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '12px', padding: '12px 14px', fontSize: '15px', color: '#1a1a2e', outline: 'none', boxSizing: 'border-box' },
-  select: {
-    width: '100%', border: '2px solid #eef1f5', borderRadius: '12px', padding: '12px 40px 12px 14px',
-    fontSize: '15px', color: '#1a1a2e', outline: 'none', boxSizing: 'border-box', cursor: 'pointer',
-    appearance: 'none', WebkitAppearance: 'none', MozAppearance: 'none',
-    backgroundColor: '#fbfcfe', backgroundImage: CHEVRON, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 14px center',
-  },
   primary: { background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '12px 20px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
   secondary: { background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '8px 14px', fontSize: '13px', fontWeight: '700', cursor: 'pointer' },
   error: { color: '#cc0000', fontSize: '13px', margin: '0 0 12px' },
@@ -145,31 +139,209 @@ const S = {
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginBottom: '14px' },
 };
 
-// A row of tap-to-select pills (used instead of a dropdown)
-function PillPicker({ options, value, onChange, format }) {
+// Style for a tappable option (selected = dark blue)
+function optionStyle(selected, extra = {}) {
+  return {
+    borderRadius: '12px', fontSize: '14.5px', fontWeight: '700', cursor: 'pointer',
+    border: selected ? '2px solid #1e3a5f' : '2px solid #eef1f5',
+    background: selected ? 'linear-gradient(135deg,#1e3a5f,#2d6a9f)' : '#fbfcfe',
+    color: selected ? 'white' : '#3d4a5c',
+    boxShadow: selected ? '0 4px 10px rgba(30,58,95,0.25)' : 'none',
+    transition: 'all 0.12s',
+    ...extra,
+  };
+}
+
+function pillStyle(selected) {
+  return optionStyle(selected, { padding: '9px 16px', borderRadius: '999px', fontSize: '13.5px' });
+}
+
+// ── Time picker ────────────────────────────────────────────────────
+// Shows "9:00 AM"; tapping opens a card with AM/PM, hour and minute buttons.
+// value / onChange use "HH:MM" (24-hour), same as before.
+const HOURS_12 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const MINUTE_STEPS = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+const PICKER_GRID = { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' };
+const PICKER_LABEL = { fontSize: '10.5px', fontWeight: '800', color: '#a8b1bd', letterSpacing: '1.5px', textTransform: 'uppercase', margin: '14px 0 8px' };
+
+function TimePicker({ value, onChange, align = 'left', hourOnly = false }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  // Close when tapping outside or pressing Esc
+  useEffect(() => {
+    if (!open) return undefined;
+    const onOutside = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onOutside);
+    document.addEventListener('touchstart', onOutside);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onOutside);
+      document.removeEventListener('touchstart', onOutside);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const total = toMinutes(value);
+  const hour24 = total === null ? 9 : Math.floor(total / 60);
+  const minute = total === null ? 0 : total % 60;
+  const isPM = hour24 >= 12;
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+
+  const commit = (h12, min, pm) => {
+    onChange(`${pad2((h12 % 12) + (pm ? 12 : 0))}:${pad2(hourOnly ? 0 : min)}`);
+  };
+
+  const minuteOptions = MINUTE_STEPS.includes(minute)
+    ? MINUTE_STEPS
+    : [...MINUTE_STEPS, minute].sort((a, b) => a - b);
+
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-      {options.map(option => {
-        const selected = option === value;
-        return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        style={{
+          ...S.input, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+          textAlign: 'left', cursor: 'pointer', fontWeight: '700',
+          borderColor: open ? '#2d6a9f' : '#eef1f5',
+          background: open ? 'white' : '#fbfcfe',
+          boxShadow: open ? '0 0 0 4px rgba(45,106,159,0.12)' : 'none',
+        }}
+      >
+        <span>{total === null ? 'Select time' : formatMinutes(total)}</span>
+        <span aria-hidden="true" style={{ fontSize: '15px', opacity: 0.7 }}>🕒</span>
+      </button>
+
+      {open && (
+        <div
+          role="dialog"
+          style={{
+            position: 'absolute', top: 'calc(100% + 8px)', [align === 'right' ? 'right' : 'left']: 0, zIndex: 50,
+            width: 'min(300px, 86vw)', background: 'white', borderRadius: '18px', padding: '16px',
+            boxShadow: '0 18px 44px rgba(30,58,95,0.24)', border: '1px solid #eef1f5', boxSizing: 'border-box',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+            <span style={{ fontSize: '28px', fontWeight: '900', color: '#1e3a5f', letterSpacing: '-0.5px' }}>
+              {hour12}:{pad2(hourOnly ? 0 : minute)}
+            </span>
+            <div style={{ display: 'flex', background: '#f0f4f8', borderRadius: '12px', padding: '3px' }}>
+              {['AM', 'PM'].map(label => {
+                const selected = (label === 'PM') === isPM;
+                return (
+                  <button
+                    type="button"
+                    key={label}
+                    onClick={() => commit(hour12, minute, label === 'PM')}
+                    style={{
+                      padding: '8px 16px', border: 'none', borderRadius: '9px', fontSize: '13px', fontWeight: '800', cursor: 'pointer',
+                      background: selected ? 'white' : 'transparent',
+                      color: selected ? '#1e3a5f' : '#8a94a3',
+                      boxShadow: selected ? '0 2px 6px rgba(0,0,0,0.12)' : 'none',
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <p style={PICKER_LABEL}>Hour</p>
+          <div style={PICKER_GRID}>
+            {HOURS_12.map(h => (
+              <button type="button" key={h} onClick={() => commit(h, minute, isPM)} style={optionStyle(h === hour12, { height: '42px' })}>
+                {h}
+              </button>
+            ))}
+          </div>
+
+          {!hourOnly && (
+            <>
+              <p style={PICKER_LABEL}>Minute</p>
+              <div style={PICKER_GRID}>
+                {minuteOptions.map(m => (
+                  <button type="button" key={m} onClick={() => commit(hour12, m, isPM)} style={optionStyle(m === minute, { height: '42px' })}>
+                    {pad2(m)}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
           <button
             type="button"
-            key={option}
-            onClick={() => onChange(option)}
-            aria-pressed={selected}
-            style={{
-              padding: '9px 16px', borderRadius: '999px', fontSize: '13.5px', fontWeight: '700', cursor: 'pointer',
-              border: selected ? '2px solid #1e3a5f' : '2px solid #e3e9f1',
-              background: selected ? 'linear-gradient(135deg,#1e3a5f,#2d6a9f)' : 'white',
-              color: selected ? 'white' : '#5a6472',
-              boxShadow: selected ? '0 4px 12px rgba(30,58,95,0.25)' : 'none',
-              transition: 'all 0.15s',
-            }}
+            onClick={() => setOpen(false)}
+            style={{ ...S.primary, width: '100%', marginTop: '16px', padding: '11px' }}
           >
-            {format(option)}
+            Done
           </button>
-        );
-      })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// "Booking opens / closes": two quick pills, or a custom clock time.
+//   anchorMin – minutes-of-day of the session start (or end)
+//   value     – how many minutes before the anchor
+//   custom    – true when the owner chose "Custom time"
+function LeadTimePicker({ value, quick, anchorMin, max, noun, custom, onChange }) {
+  const [error, setError] = useState('');
+  const isCustom = custom ?? !quick.includes(value);
+
+  const pickTime = (time) => {
+    const chosen = toMinutes(time);
+    const offset = (((anchorMin - chosen) % DAY_MIN) + DAY_MIN) % DAY_MIN;
+    if (offset > max) {
+      setError(`Choose a time before the session ${noun === 'start' ? 'starts' : 'ends'}, up to ${max / 60} hours earlier.`);
+      return;
+    }
+    setError('');
+    onChange(offset, true);
+  };
+
+  return (
+    <div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+        {quick.map(q => (
+          <button
+            type="button"
+            key={q}
+            onClick={() => { setError(''); onChange(q, false); }}
+            aria-pressed={!isCustom && value === q}
+            style={pillStyle(!isCustom && value === q)}
+          >
+            {leadLabel(q)}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={() => { setError(''); onChange(value, true); }}
+          aria-pressed={isCustom}
+          style={pillStyle(isCustom)}
+        >
+          Custom time
+        </button>
+      </div>
+
+      {isCustom && (
+        <div style={{ marginTop: '12px', maxWidth: '240px' }}>
+          {anchorMin === null ? (
+            <p style={S.hint}>Set the {noun} time first.</p>
+          ) : (
+            <TimePicker value={minutesToHHMM(anchorMin - value)} onChange={pickTime} />
+          )}
+        </div>
+      )}
+
+      {error && <p style={{ ...S.error, margin: '8px 0 0' }}>{error}</p>}
     </div>
   );
 }
@@ -234,41 +406,46 @@ function SessionsEditor({ sessions, onChange }) {
               </button>
             </div>
 
-            <div style={S.grid}>
-              <div>
-                <label style={S.label}>Name</label>
-                <input style={S.input} value={s.name} maxLength={30} onChange={e => update(i, { name: e.target.value })} placeholder="e.g. Morning" />
-              </div>
+            <div style={{ marginBottom: '14px' }}>
+              <label style={S.label}>Session name</label>
+              <input style={S.input} value={s.name} maxLength={30} onChange={e => update(i, { name: e.target.value })} placeholder="e.g. Morning" />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
               <div>
                 <label style={S.label}>Starts</label>
-                <input style={S.input} type="time" value={s.startTime} onChange={e => update(i, { startTime: e.target.value })} />
+                <TimePicker value={s.startTime} onChange={(v) => update(i, { startTime: v })} />
               </div>
               <div>
                 <label style={S.label}>Ends</label>
-                <input style={S.input} type="time" value={s.endTime} onChange={e => update(i, { endTime: e.target.value })} />
+                <TimePicker align="right" value={s.endTime} onChange={(v) => update(i, { endTime: v })} />
               </div>
             </div>
-            <p style={{ ...S.hint, margin: '-6px 0 16px' }}>An end time earlier than the start time means the session runs past midnight.</p>
+            <p style={{ ...S.hint, margin: '8px 0 18px' }}>An end time earlier than the start time means the session runs past midnight.</p>
 
             <label style={S.label}>Booking opens</label>
-            <PillPicker
-              options={optionsWith(OPEN_BEFORE_OPTIONS, s.opensBeforeMin)}
+            <LeadTimePicker
               value={s.opensBeforeMin}
-              onChange={(v) => update(i, { opensBeforeMin: v })}
-              format={shortMinutes}
+              quick={OPEN_QUICK}
+              anchorMin={startMin}
+              max={OPEN_MAX}
+              noun="start"
+              custom={s.opensCustom}
+              onChange={(minutes, custom) => update(i, { opensBeforeMin: minutes, opensCustom: custom })}
             />
-            <p style={{ ...S.hint, margin: '6px 0 16px' }}>before the session starts</p>
 
-            <label style={S.label}>Booking closes</label>
-            <PillPicker
-              options={optionsWith(CLOSE_BEFORE_OPTIONS, s.closesBeforeMin)}
+            <label style={{ ...S.label, marginTop: '18px' }}>Booking closes</label>
+            <LeadTimePicker
               value={s.closesBeforeMin}
-              onChange={(v) => update(i, { closesBeforeMin: v })}
-              format={shortMinutes}
+              quick={CLOSE_QUICK}
+              anchorMin={endMin}
+              max={CLOSE_MAX}
+              noun="end"
+              custom={s.closesCustom}
+              onChange={(minutes, custom) => update(i, { closesBeforeMin: minutes, closesCustom: custom })}
             />
-            <p style={{ ...S.hint, margin: '6px 0 16px' }}>before the session ends</p>
 
-            <label style={S.label}>Closed on</label>
+            <label style={{ ...S.label, marginTop: '18px' }}>Closed on</label>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {WEEK_DAYS.map(({ n, label }) => {
                 const closed = s.closedDays.includes(n);
@@ -313,6 +490,19 @@ function SessionsEditor({ sessions, onChange }) {
         Token numbers start again from 1 when each session's booking opens. A session's queue stays open until the next session's booking opens.
       </p>
     </>
+  );
+}
+
+// Used when a clinic has no sessions: the hour its token numbers reset
+function ResetHourField({ hour, onChange }) {
+  return (
+    <div>
+      <label style={S.label}>Token numbers reset at</label>
+      <div style={{ maxWidth: '240px' }}>
+        <TimePicker hourOnly value={`${pad2(hour)}:00`} onChange={(v) => onChange(parseInt(v.slice(0, 2), 10))} />
+      </div>
+      <p style={S.hint}>IST. Only used when no sessions are set below.</p>
+    </div>
   );
 }
 
@@ -396,15 +586,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
           <label style={S.label}>Confirm PIN</label>
           <input style={S.input} type="password" inputMode="numeric" value={pinConfirm} onChange={e => setPinConfirm(e.target.value)} />
         </div>
-        {sessions.length === 0 && (
-          <div>
-            <label style={S.label}>Token numbers reset at</label>
-            <select style={S.select} value={hour} onChange={e => setHour(Number(e.target.value))}>
-              {HOURS.map(h => <option key={h} value={h}>{formatHour(h)} (IST)</option>)}
-            </select>
-            <p style={S.hint}>Only used when no sessions are set below.</p>
-          </div>
-        )}
+        {sessions.length === 0 && <ResetHourField hour={hour} onChange={setHour} />}
       </div>
 
       <SessionsEditor sessions={sessions} onChange={setSessions} />
@@ -560,15 +742,7 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
               <label style={S.label}>Clinic name</label>
               <input style={S.input} value={name} maxLength={80} onChange={e => setName(e.target.value)} />
             </div>
-            {sessions.length === 0 && (
-              <div>
-                <label style={S.label}>Token numbers reset at</label>
-                <select style={S.select} value={hour} onChange={e => setHour(Number(e.target.value))}>
-                  {HOURS.map(h => <option key={h} value={h}>{formatHour(h)} (IST)</option>)}
-                </select>
-                <p style={S.hint}>Only used when no sessions are set below.</p>
-              </div>
-            )}
+            {sessions.length === 0 && <ResetHourField hour={hour} onChange={setHour} />}
             <div>
               <label style={S.label}>New staff PIN (optional)</label>
               <input style={S.input} type="password" inputMode="numeric" value={newPin} onChange={e => setNewPin(e.target.value)} placeholder="Leave blank to keep" />
