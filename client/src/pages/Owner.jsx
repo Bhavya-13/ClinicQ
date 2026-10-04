@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import SERVER from '../config';
 
 const TOKEN_KEY = 'cq_owner_token';
@@ -40,6 +41,29 @@ function formatHour(h) {
   return `${hour}:00 ${suffix}`;
 }
 
+// ── Mobile-friendly spacing for this page ──────────────────────────
+function useOwnerStyles() {
+  useEffect(() => {
+    const id = 'clinicq-owner-styles';
+    if (document.getElementById(id)) return;
+    const style = document.createElement('style');
+    style.id = id;
+    style.innerHTML = `
+      @media (max-width: 600px) {
+        .cq-owner-page { padding: 12px !important; }
+        .cq-owner-card { padding: 16px !important; border-radius: 16px !important; }
+        .cq-owner-session { padding: 14px !important; }
+        .cq-owner-page input, .cq-owner-page textarea { font-size: 16px !important; }
+        .cq-owner-title { font-size: 22px !important; }
+        .cq-owner-actions { width: 100%; }
+        .cq-owner-actions > * { flex: 1 1 auto; text-align: center; box-sizing: border-box; }
+        .cq-owner-form-actions > button { flex: 1 1 auto; }
+      }
+    `;
+    document.head.appendChild(style);
+  }, []);
+}
+
 // ── Sessions helpers ───────────────────────────────────────────────
 const DAY_MIN = 24 * 60;
 const WEEK_DAYS = [
@@ -50,8 +74,8 @@ const WEEK_DAYS = [
 // The two quick choices for "booking opens / closes" (anything else is a custom time)
 const OPEN_QUICK = [60, 120];   // minutes before the session starts
 const CLOSE_QUICK = [30, 60];   // minutes before the session ends
-const OPEN_MAX = 720;           // custom: up to 12 hours before the start
-const CLOSE_MAX = 240;          // custom: up to 4 hours before the end
+const OPEN_MAX = 720;           // up to 12 hours before the start
+const CLOSE_MAX = 240;          // up to 4 hours before the end
 
 const DEFAULT_NEW_SESSIONS = [
   { name: 'Morning', startTime: '09:00', endTime: '13:00' },
@@ -64,10 +88,10 @@ function newSession(existing) {
   return { ...base, opensBeforeMin: 120, closesBeforeMin: 30, closedDays: [] };
 }
 
-// 30 → "30 min before", 120 → "2 hr before"
-function leadLabel(m) {
-  if (m < 60) return `${m} min before`;
-  return `${+(m / 60).toFixed(2)} hr before`;
+// 30 → "30 min", 120 → "2 hr"
+function leadShort(m) {
+  if (m < 60) return `${m} min`;
+  return `${+(m / 60).toFixed(2)} hr`;
 }
 
 function toMinutes(time) {
@@ -117,6 +141,23 @@ function sessionsPayload(list) {
   }));
 }
 
+// Quick checks before saving (the server checks overlaps between sessions)
+function validateSessionsClient(sessions) {
+  for (const s of sessions) {
+    if (!s.name.trim()) return 'Each session needs a name.';
+    const name = s.name.trim();
+    const start = toMinutes(s.startTime);
+    const end = toMinutes(s.endTime);
+    if (start === null || end === null) return `${name}: set a start and end time.`;
+    if (start === end) return `${name}: the start and end time can't be the same.`;
+    if (s.opensBeforeMin > OPEN_MAX)
+      return `${name}: booking must open before the session starts — at most 12 hours earlier.`;
+    if (s.closesBeforeMin > CLOSE_MAX)
+      return `${name}: booking must close before the session ends — at most 4 hours earlier.`;
+  }
+  return '';
+}
+
 function sessionSummary(clinic) {
   if (!clinic.sessions || clinic.sessions.length === 0) {
     return `open all day · resets at ${formatHour(clinic.day_reset_hour)}`;
@@ -139,48 +180,55 @@ const S = {
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginBottom: '14px' },
 };
 
-// Style for a tappable option (selected = dark blue)
-function optionStyle(selected, extra = {}) {
+// A compact tappable pill (selected = dark blue)
+function pillStyle(selected) {
   return {
-    borderRadius: '12px', fontSize: '14.5px', fontWeight: '700', cursor: 'pointer',
-    border: selected ? '2px solid #1e3a5f' : '2px solid #eef1f5',
-    background: selected ? 'linear-gradient(135deg,#1e3a5f,#2d6a9f)' : '#fbfcfe',
-    color: selected ? 'white' : '#3d4a5c',
-    boxShadow: selected ? '0 4px 10px rgba(30,58,95,0.25)' : 'none',
-    transition: 'all 0.12s',
-    ...extra,
+    padding: '9px 15px', borderRadius: '999px', fontSize: '13.5px', fontWeight: '700', cursor: 'pointer',
+    border: selected ? '2px solid #1e3a5f' : '2px solid #e3e9f1',
+    background: selected ? 'linear-gradient(135deg,#1e3a5f,#2d6a9f)' : 'white',
+    color: selected ? 'white' : '#5a6472',
+    boxShadow: selected ? '0 4px 12px rgba(30,58,95,0.25)' : 'none',
+    transition: 'all 0.15s',
   };
 }
 
-function pillStyle(selected) {
-  return optionStyle(selected, { padding: '9px 16px', borderRadius: '999px', fontSize: '13.5px' });
+// ── Analog clock time picker ───────────────────────────────────────
+// Shows "9:00 AM". Tapping opens a clock card: pick the hour, then the minute.
+// value / onChange use "HH:MM" (24-hour).
+const DIAL_SIZE = 240;
+const DIAL_C = DIAL_SIZE / 2;
+const DIAL_R = 92;
+
+function polar(deg, radius) {
+  const rad = (deg * Math.PI) / 180;
+  return { x: DIAL_C + radius * Math.sin(rad), y: DIAL_C - radius * Math.cos(rad) };
 }
 
-// ── Time picker ────────────────────────────────────────────────────
-// Shows "9:00 AM"; tapping opens a card with AM/PM, hour and minute buttons.
-// value / onChange use "HH:MM" (24-hour), same as before.
-const HOURS_12 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-const MINUTE_STEPS = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
-const PICKER_GRID = { display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' };
-const PICKER_LABEL = { fontSize: '10.5px', fontWeight: '800', color: '#a8b1bd', letterSpacing: '1.5px', textTransform: 'uppercase', margin: '14px 0 8px' };
+function segmentStyle(active, disabled) {
+  return {
+    fontSize: '44px', fontWeight: '900', lineHeight: 1, padding: '10px 12px', borderRadius: '14px', border: 'none',
+    background: active ? '#dbeafe' : '#f0f4f8',
+    color: active ? '#1e3a5f' : '#8a94a3',
+    cursor: disabled ? 'default' : 'pointer',
+    fontVariantNumeric: 'tabular-nums',
+  };
+}
 
-function TimePicker({ value, onChange, align = 'left', hourOnly = false }) {
+function TimePicker({ value, onChange, hourOnly = false }) {
   const [open, setOpen] = useState(false);
-  const wrapRef = useRef(null);
+  const [mode, setMode] = useState('hour'); // 'hour' → 'minute'
+  const dialRef = useRef(null);
+  const dragging = useRef(false);
 
-  // Close when tapping outside or pressing Esc
+  // Esc closes; the page behind doesn't scroll while the card is open
   useEffect(() => {
     if (!open) return undefined;
-    const onOutside = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
-    };
     const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
-    document.addEventListener('mousedown', onOutside);
-    document.addEventListener('touchstart', onOutside);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('mousedown', onOutside);
-      document.removeEventListener('touchstart', onOutside);
+      document.body.style.overflow = previousOverflow;
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
@@ -195,15 +243,46 @@ function TimePicker({ value, onChange, align = 'left', hourOnly = false }) {
     onChange(`${pad2((h12 % 12) + (pm ? 12 : 0))}:${pad2(hourOnly ? 0 : min)}`);
   };
 
-  const minuteOptions = MINUTE_STEPS.includes(minute)
-    ? MINUTE_STEPS
-    : [...MINUTE_STEPS, minute].sort((a, b) => a - b);
+  const openPicker = () => { setMode('hour'); setOpen(true); };
+
+  // Turn a finger/mouse position on the dial into an hour or minute
+  const applyPointer = (e) => {
+    const rect = dialRef.current.getBoundingClientRect();
+    const dx = e.clientX - (rect.left + rect.width / 2);
+    const dy = e.clientY - (rect.top + rect.height / 2);
+    let deg = (Math.atan2(dx, -dy) * 180) / Math.PI;
+    if (deg < 0) deg += 360;
+    const step = Math.round(deg / 30) % 12; // 0..11, one step per number on the dial
+
+    if (mode === 'hour') commit(step === 0 ? 12 : step, minute, isPM);
+    else commit(hour12, step * 5, isPM);
+  };
+
+  const onPointerDown = (e) => {
+    e.preventDefault();
+    dragging.current = true;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    applyPointer(e);
+  };
+  const onPointerMove = (e) => { if (dragging.current) applyPointer(e); };
+  const endPointer = () => {
+    if (!dragging.current) return;
+    dragging.current = false;
+    if (mode === 'hour' && !hourOnly) setMode('minute'); // hour chosen → now the minute
+  };
+
+  const items = mode === 'hour'
+    ? Array.from({ length: 12 }, (_, i) => ({ label: String(i + 1), deg: (i + 1) * 30, selected: i + 1 === hour12 }))
+    : Array.from({ length: 12 }, (_, i) => ({ label: pad2(i * 5), deg: i * 30, selected: i * 5 === minute }));
+  const handDeg = mode === 'hour' ? (hour12 % 12) * 30 : minute * 6;
+  const hand = polar(handDeg, DIAL_R);
+  const offNumber = mode === 'minute' && minute % 5 !== 0; // e.g. 9:07 saved earlier
 
   return (
-    <div ref={wrapRef} style={{ position: 'relative' }}>
+    <>
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={openPicker}
         aria-haspopup="dialog"
         aria-expanded={open}
         style={{
@@ -211,80 +290,120 @@ function TimePicker({ value, onChange, align = 'left', hourOnly = false }) {
           textAlign: 'left', cursor: 'pointer', fontWeight: '700',
           borderColor: open ? '#2d6a9f' : '#eef1f5',
           background: open ? 'white' : '#fbfcfe',
-          boxShadow: open ? '0 0 0 4px rgba(45,106,159,0.12)' : 'none',
         }}
       >
         <span>{total === null ? 'Select time' : formatMinutes(total)}</span>
         <span aria-hidden="true" style={{ fontSize: '15px', opacity: 0.7 }}>🕒</span>
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
-          role="dialog"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
           style={{
-            position: 'absolute', top: 'calc(100% + 8px)', [align === 'right' ? 'right' : 'left']: 0, zIndex: 50,
-            width: 'min(300px, 86vw)', background: 'white', borderRadius: '18px', padding: '16px',
-            boxShadow: '0 18px 44px rgba(30,58,95,0.24)', border: '1px solid #eef1f5', boxSizing: 'border-box',
+            position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(15,30,50,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', boxSizing: 'border-box',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-            <span style={{ fontSize: '28px', fontWeight: '900', color: '#1e3a5f', letterSpacing: '-0.5px' }}>
-              {hour12}:{pad2(hourOnly ? 0 : minute)}
-            </span>
-            <div style={{ display: 'flex', background: '#f0f4f8', borderRadius: '12px', padding: '3px' }}>
-              {['AM', 'PM'].map(label => {
-                const selected = (label === 'PM') === isPM;
+          <div
+            role="dialog"
+            aria-label="Select time"
+            style={{
+              width: '100%', maxWidth: '320px', maxHeight: '100%', overflowY: 'auto', boxSizing: 'border-box',
+              background: 'white', borderRadius: '24px', padding: '20px',
+              boxShadow: '0 24px 60px rgba(15,30,50,0.4)', fontFamily: "'Segoe UI',sans-serif",
+            }}
+          >
+            {/* Big time: tap the hour or the minute to switch */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '14px', marginBottom: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <button type="button" onClick={() => setMode('hour')} style={segmentStyle(mode === 'hour', false)}>
+                  {pad2(hour12)}
+                </button>
+                <span style={{ fontSize: '40px', fontWeight: '900', color: '#1e3a5f' }}>:</span>
+                <button
+                  type="button"
+                  disabled={hourOnly}
+                  onClick={() => setMode('minute')}
+                  style={segmentStyle(mode === 'minute', hourOnly)}
+                >
+                  {pad2(hourOnly ? 0 : minute)}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {['AM', 'PM'].map(label => {
+                  const selected = (label === 'PM') === isPM;
+                  return (
+                    <button
+                      type="button"
+                      key={label}
+                      onClick={() => commit(hour12, minute, label === 'PM')}
+                      style={{
+                        padding: '9px 12px', borderRadius: '10px', fontSize: '13px', fontWeight: '800', cursor: 'pointer',
+                        border: selected ? '2px solid #1e3a5f' : '2px solid #e3e9f1',
+                        background: selected ? '#1e3a5f' : 'white',
+                        color: selected ? 'white' : '#8a94a3',
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <p style={{ textAlign: 'center', fontSize: '12px', fontWeight: '700', color: '#a8b1bd', letterSpacing: '1.5px', textTransform: 'uppercase', margin: '10px 0 8px' }}>
+              {mode === 'hour' ? 'Select hour' : 'Select minute'}
+            </p>
+
+            {/* The clock: tap or drag */}
+            <svg
+              ref={dialRef}
+              viewBox={`0 0 ${DIAL_SIZE} ${DIAL_SIZE}`}
+              width="100%"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={endPointer}
+              onPointerCancel={endPointer}
+              style={{ display: 'block', maxWidth: '260px', margin: '0 auto', touchAction: 'none', userSelect: 'none', cursor: 'pointer' }}
+            >
+              <circle cx={DIAL_C} cy={DIAL_C} r={116} fill="#f0f4f8" />
+              <line x1={DIAL_C} y1={DIAL_C} x2={hand.x} y2={hand.y} stroke="#2d6a9f" strokeWidth="2.5" />
+              <circle cx={DIAL_C} cy={DIAL_C} r="4.5" fill="#2d6a9f" />
+              <circle cx={hand.x} cy={hand.y} r="20" fill="#1e3a5f" />
+              {offNumber && <circle cx={hand.x} cy={hand.y} r="3.5" fill="white" />}
+              {items.map(item => {
+                const p = polar(item.deg, DIAL_R);
                 return (
-                  <button
-                    type="button"
-                    key={label}
-                    onClick={() => commit(hour12, minute, label === 'PM')}
-                    style={{
-                      padding: '8px 16px', border: 'none', borderRadius: '9px', fontSize: '13px', fontWeight: '800', cursor: 'pointer',
-                      background: selected ? 'white' : 'transparent',
-                      color: selected ? '#1e3a5f' : '#8a94a3',
-                      boxShadow: selected ? '0 2px 6px rgba(0,0,0,0.12)' : 'none',
-                    }}
+                  <text
+                    key={item.label}
+                    x={p.x}
+                    y={p.y}
+                    dy="0.35em"
+                    textAnchor="middle"
+                    fontSize="16"
+                    fontWeight="700"
+                    fill={item.selected ? 'white' : '#3d4a5c'}
+                    style={{ pointerEvents: 'none' }}
                   >
-                    {label}
-                  </button>
+                    {item.label}
+                  </text>
                 );
               })}
-            </div>
+            </svg>
+
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              style={{ ...S.primary, width: '100%', marginTop: '16px', padding: '13px', fontSize: '15px' }}
+            >
+              Done
+            </button>
           </div>
-
-          <p style={PICKER_LABEL}>Hour</p>
-          <div style={PICKER_GRID}>
-            {HOURS_12.map(h => (
-              <button type="button" key={h} onClick={() => commit(h, minute, isPM)} style={optionStyle(h === hour12, { height: '42px' })}>
-                {h}
-              </button>
-            ))}
-          </div>
-
-          {!hourOnly && (
-            <>
-              <p style={PICKER_LABEL}>Minute</p>
-              <div style={PICKER_GRID}>
-                {minuteOptions.map(m => (
-                  <button type="button" key={m} onClick={() => commit(hour12, m, isPM)} style={optionStyle(m === minute, { height: '42px' })}>
-                    {pad2(m)}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setOpen(false)}
-            style={{ ...S.primary, width: '100%', marginTop: '16px', padding: '11px' }}
-          >
-            Done
-          </button>
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 
@@ -292,18 +411,14 @@ function TimePicker({ value, onChange, align = 'left', hourOnly = false }) {
 //   anchorMin – minutes-of-day of the session start (or end)
 //   value     – how many minutes before the anchor
 //   custom    – true when the owner chose "Custom time"
-function LeadTimePicker({ value, quick, anchorMin, max, noun, custom, onChange }) {
-  const [error, setError] = useState('');
+function LeadTimePicker({ value, quick, anchorMin, max, noun, caption, custom, onChange }) {
   const isCustom = custom ?? !quick.includes(value);
+  const outOfRange = value > max;
 
+  // Any time can be picked while moving around the clock; out-of-range is flagged, not blocked
   const pickTime = (time) => {
     const chosen = toMinutes(time);
     const offset = (((anchorMin - chosen) % DAY_MIN) + DAY_MIN) % DAY_MIN;
-    if (offset > max) {
-      setError(`Choose a time before the session ${noun === 'start' ? 'starts' : 'ends'}, up to ${max / 60} hours earlier.`);
-      return;
-    }
-    setError('');
     onChange(offset, true);
   };
 
@@ -314,25 +429,26 @@ function LeadTimePicker({ value, quick, anchorMin, max, noun, custom, onChange }
           <button
             type="button"
             key={q}
-            onClick={() => { setError(''); onChange(q, false); }}
+            onClick={() => onChange(q, false)}
             aria-pressed={!isCustom && value === q}
             style={pillStyle(!isCustom && value === q)}
           >
-            {leadLabel(q)}
+            {leadShort(q)}
           </button>
         ))}
         <button
           type="button"
-          onClick={() => { setError(''); onChange(value, true); }}
+          onClick={() => onChange(value, true)}
           aria-pressed={isCustom}
           style={pillStyle(isCustom)}
         >
-          Custom time
+          Custom
         </button>
       </div>
+      <p style={S.hint}>{caption}</p>
 
       {isCustom && (
-        <div style={{ marginTop: '12px', maxWidth: '240px' }}>
+        <div style={{ marginTop: '10px' }}>
           {anchorMin === null ? (
             <p style={S.hint}>Set the {noun} time first.</p>
           ) : (
@@ -341,7 +457,11 @@ function LeadTimePicker({ value, quick, anchorMin, max, noun, custom, onChange }
         </div>
       )}
 
-      {error && <p style={{ ...S.error, margin: '8px 0 0' }}>{error}</p>}
+      {outOfRange && (
+        <p style={{ margin: '8px 0 0', fontSize: '12.5px', fontWeight: '600', color: '#c0392b', lineHeight: 1.4 }}>
+          Pick a time before the session {noun === 'start' ? 'starts' : 'ends'} — at most {max / 60} hours earlier.
+        </p>
+      )}
     </div>
   );
 }
@@ -396,9 +516,11 @@ function SessionsEditor({ sessions, onChange }) {
       {sessions.map((s, i) => {
         const startMin = toMinutes(s.startTime);
         const endMin = toMinutes(s.endTime);
-        const valid = startMin !== null && endMin !== null && startMin !== endMin;
+        const showPreview =
+          startMin !== null && endMin !== null && startMin !== endMin &&
+          s.opensBeforeMin <= OPEN_MAX && s.closesBeforeMin <= CLOSE_MAX;
         return (
-          <div key={i} style={{ background: '#f7f9fc', border: '1px solid #eef1f5', borderRadius: '16px', padding: '18px', marginBottom: '14px' }}>
+          <div key={i} className="cq-owner-session" style={{ background: '#f7f9fc', border: '1px solid #eef1f5', borderRadius: '16px', padding: '18px', marginBottom: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
               <span style={{ fontSize: '14px', fontWeight: '800', color: '#1e3a5f' }}>Session {i + 1}</span>
               <button type="button" style={{ ...S.secondary, color: '#cc0000', borderColor: '#ffd5d5', padding: '5px 12px', fontSize: '12px' }} onClick={() => remove(i)}>
@@ -418,34 +540,42 @@ function SessionsEditor({ sessions, onChange }) {
               </div>
               <div>
                 <label style={S.label}>Ends</label>
-                <TimePicker align="right" value={s.endTime} onChange={(v) => update(i, { endTime: v })} />
+                <TimePicker value={s.endTime} onChange={(v) => update(i, { endTime: v })} />
               </div>
             </div>
             <p style={{ ...S.hint, margin: '8px 0 18px' }}>An end time earlier than the start time means the session runs past midnight.</p>
 
-            <label style={S.label}>Booking opens</label>
-            <LeadTimePicker
-              value={s.opensBeforeMin}
-              quick={OPEN_QUICK}
-              anchorMin={startMin}
-              max={OPEN_MAX}
-              noun="start"
-              custom={s.opensCustom}
-              onChange={(minutes, custom) => update(i, { opensBeforeMin: minutes, opensCustom: custom })}
-            />
+            {/* Opens and closes, side by side (stacked on small phones) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '18px', marginBottom: '18px' }}>
+              <div>
+                <label style={S.label}>Booking opens</label>
+                <LeadTimePicker
+                  value={s.opensBeforeMin}
+                  quick={OPEN_QUICK}
+                  anchorMin={startMin}
+                  max={OPEN_MAX}
+                  noun="start"
+                  caption="before the session starts"
+                  custom={s.opensCustom}
+                  onChange={(minutes, custom) => update(i, { opensBeforeMin: minutes, opensCustom: custom })}
+                />
+              </div>
+              <div>
+                <label style={S.label}>Booking closes</label>
+                <LeadTimePicker
+                  value={s.closesBeforeMin}
+                  quick={CLOSE_QUICK}
+                  anchorMin={endMin}
+                  max={CLOSE_MAX}
+                  noun="end"
+                  caption="before the session ends"
+                  custom={s.closesCustom}
+                  onChange={(minutes, custom) => update(i, { closesBeforeMin: minutes, closesCustom: custom })}
+                />
+              </div>
+            </div>
 
-            <label style={{ ...S.label, marginTop: '18px' }}>Booking closes</label>
-            <LeadTimePicker
-              value={s.closesBeforeMin}
-              quick={CLOSE_QUICK}
-              anchorMin={endMin}
-              max={CLOSE_MAX}
-              noun="end"
-              custom={s.closesCustom}
-              onChange={(minutes, custom) => update(i, { closesBeforeMin: minutes, closesCustom: custom })}
-            />
-
-            <label style={{ ...S.label, marginTop: '18px' }}>Closed on</label>
+            <label style={S.label}>Closed on</label>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {WEEK_DAYS.map(({ n, label }) => {
                 const closed = s.closedDays.includes(n);
@@ -470,7 +600,7 @@ function SessionsEditor({ sessions, onChange }) {
             </div>
             <p style={S.hint}>Tap a day to mark this session closed on that day.</p>
 
-            {valid && (
+            {showPreview && (
               <div style={{ background: '#eaf3fc', border: '1px solid #d3e6f7', borderRadius: '12px', padding: '10px 14px', marginTop: '16px' }}>
                 <p style={{ fontSize: '12.5px', color: '#2d6a9f', fontWeight: '600', margin: 0, lineHeight: 1.5 }}>
                   Booking opens <strong>{formatMinutes(startMin - s.opensBeforeMin)}</strong> · closes <strong>{formatMinutes(endMin - s.closesBeforeMin)}</strong> · session ends <strong>{formatMinutes(endMin)}</strong>{endMin < startMin ? ' (next day)' : ''}
@@ -498,9 +628,7 @@ function ResetHourField({ hour, onChange }) {
   return (
     <div>
       <label style={S.label}>Token numbers reset at</label>
-      <div style={{ maxWidth: '240px' }}>
-        <TimePicker hourOnly value={`${pad2(hour)}:00`} onChange={(v) => onChange(parseInt(v.slice(0, 2), 10))} />
-      </div>
+      <TimePicker hourOnly value={`${pad2(hour)}:00`} onChange={(v) => onChange(parseInt(v.slice(0, 2), 10))} />
       <p style={S.hint}>IST. Only used when no sessions are set below.</p>
     </div>
   );
@@ -532,6 +660,9 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
     if (!PIN_PATTERN.test(pin)) return setError('PIN must be 6–12 digits.');
     if (pin !== pinConfirm) return setError('The two PINs do not match.');
 
+    const sessionProblem = validateSessionsClient(sessions);
+    if (sessionProblem) return setError(sessionProblem);
+
     setSaving(true);
     try {
       const res = await ownerFetch('/clinics', {
@@ -558,7 +689,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
   };
 
   return (
-    <form onSubmit={submit} style={S.card}>
+    <form onSubmit={submit} className="cq-owner-card" style={S.card}>
       <h2 style={{ fontSize: '17px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 18px' }}>Add a clinic</h2>
 
       <p style={S.sectionTitle}>Clinic setup</p>
@@ -647,6 +778,9 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
     setError('');
     if (!name.trim()) return setError('Clinic name is required.');
 
+    const sessionProblem = validateSessionsClient(sessions);
+    if (sessionProblem) return setError(sessionProblem);
+
     const updates = {};
     if (name.trim() !== clinic.name) updates.name = name.trim();
     if (Number(hour) !== clinic.day_reset_hour) updates.dayResetHour = Number(hour);
@@ -699,7 +833,7 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
   );
 
   return (
-    <div style={{ ...S.card, opacity: clinic.is_active ? 1 : 0.7 }}>
+    <div className="cq-owner-card" style={{ ...S.card, opacity: clinic.is_active ? 1 : 0.7 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
         <div style={{ minWidth: 0 }}>
           <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 4px' }}>{clinic.name}</h3>
@@ -761,7 +895,7 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
 
           {error && <p style={S.error}>{error}</p>}
 
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div className="cq-owner-form-actions" style={{ display: 'flex', gap: '10px' }}>
             <button style={{ ...S.primary, opacity: saving ? 0.7 : 1 }} disabled={saving} onClick={save}>
               {saving ? 'Saving...' : 'Save changes'}
             </button>
@@ -774,6 +908,8 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
 }
 
 export default function Owner() {
+  useOwnerStyles();
+
   const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || '');
   const [secret, setSecret] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -846,8 +982,8 @@ export default function Owner() {
 
   if (!token) {
     return (
-      <div style={{ ...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <form onSubmit={handleLogin} style={{ ...S.card, width: '100%', maxWidth: '360px', textAlign: 'center', marginBottom: 0 }}>
+      <div className="cq-owner-page" style={{ ...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <form onSubmit={handleLogin} className="cq-owner-card" style={{ ...S.card, width: '100%', maxWidth: '360px', textAlign: 'center', marginBottom: 0 }}>
           <p style={{ fontSize: '12px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', margin: '0 0 6px' }}>CLINICQ</p>
           <p style={{ fontSize: '17px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 18px' }}>Owner access</p>
           <input
@@ -866,7 +1002,7 @@ export default function Owner() {
   }
 
   return (
-    <div style={S.page}>
+    <div className="cq-owner-page" style={S.page}>
       <div style={{ maxWidth: '900px', margin: '0 auto' }}>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', gap: '12px', flexWrap: 'wrap' }}>
@@ -874,9 +1010,9 @@ export default function Owner() {
             <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', textTransform: 'uppercase', margin: '0 0 4px' }}>
               Clinic<span style={{ color: '#2d6a9f' }}>Q</span> · Owner
             </p>
-            <h1 style={{ fontSize: '26px', fontWeight: '900', color: '#1e3a5f', margin: 0 }}>Clinics</h1>
+            <h1 className="cq-owner-title" style={{ fontSize: '26px', fontWeight: '900', color: '#1e3a5f', margin: 0 }}>Clinics</h1>
           </div>
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div className="cq-owner-actions" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <a href="/" target="_blank" rel="noreferrer" style={{ ...S.secondary, textDecoration: 'none' }}>View homepage ↗</a>
             <button style={S.secondary} onClick={() => logout()}>🔒 Log out</button>
           </div>
@@ -884,7 +1020,7 @@ export default function Owner() {
 
         {notice && (
           <div style={{ background: '#f0f7ff', border: '1.5px solid #cce0f5', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-            <p style={{ margin: 0, color: '#2d6a9f', fontWeight: '600', fontSize: '14px' }}>{notice}</p>
+            <p style={{ margin: 0, color: '#2d6a9f', fontWeight: '600', fontSize: '14px', lineHeight: 1.45 }}>{notice}</p>
             <button onClick={() => setNotice('')} style={{ background: 'none', border: 'none', color: '#2d6a9f', cursor: 'pointer', fontWeight: '700' }}>✕</button>
           </div>
         )}
