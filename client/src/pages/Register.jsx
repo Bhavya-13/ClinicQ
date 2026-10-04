@@ -2,6 +2,14 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useClinic } from '../clinic';
 
+// Why booking is closed → icon and heading (the sentence itself comes from the server)
+const CLOSED_COPY = {
+  closed_day: { icon: '📅', title: 'Clinic closed today' },
+  booking_closed: { icon: '⏹️', title: 'Booking has closed' },
+  not_open_yet: { icon: '⏳', title: 'Booking not open yet' },
+  unavailable: { icon: 'ℹ️', title: 'Booking unavailable' },
+};
+
 export default function Register() {
   const { slug, clinic, api, socket } = useClinic();
   const [numPatients, setNumPatients] = useState(1);
@@ -10,6 +18,11 @@ export default function Register() {
   const [error, setError] = useState('');
   const [isPaused, setIsPaused] = useState(clinic.isPaused);
   const navigate = useNavigate();
+
+  // Is online booking open right now? (the page updates by itself when this changes)
+  const schedule = clinic.schedule;
+  const bookingClosed = !!schedule && schedule.bookingOpen === false;
+  const closedCopy = CLOSED_COPY[schedule?.reason] || CLOSED_COPY.unavailable;
 
   // Live pause/resume from staff
   useEffect(() => {
@@ -25,7 +38,7 @@ export default function Register() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
-    if (isPaused) return;
+    if (isPaused || bookingClosed) return;
     if (!name.trim()) { setError('Please enter your name.'); return; }
     setLoading(true);
     try {
@@ -98,116 +111,156 @@ export default function Register() {
           <p style={{ color: '#9aa5b1', fontSize: '13px', margin: 0 }}>
             Get your token in seconds — no app needed
           </p>
+
+          {schedule?.mode === 'sessions' && schedule.bookingOpen && (
+            <p style={{
+              display: 'inline-block', margin: '14px 0 0', padding: '6px 14px', borderRadius: '20px',
+              background: '#e8f8f5', color: '#00875f', fontSize: '12.5px', fontWeight: '700',
+            }}>
+              {schedule.sessionName} · {schedule.shortMessage}
+            </p>
+          )}
         </div>
 
-        {isPaused && (
+        {bookingClosed ? (
+          /* ── Booking is closed: explain why instead of showing the form ── */
           <div style={{
-            background: '#fff8e6', border: '1.5px solid #f5d38a', borderRadius: '14px',
-            padding: '14px 16px', marginBottom: '22px', display: 'flex', gap: '10px', alignItems: 'flex-start',
+            background: '#f5f8fc', border: '1.5px solid #dbe6f3', borderRadius: '20px',
+            padding: '28px 22px', textAlign: 'center',
           }}>
-            <span style={{ fontSize: '18px' }}>⏸</span>
-            <p style={{ margin: 0, fontSize: '13.5px', color: '#a56a00', lineHeight: 1.45 }}>
-              Registrations are paused right now. Please check back in a few minutes — this page updates automatically.
+            <div style={{ fontSize: '34px', marginBottom: '10px' }}>{closedCopy.icon}</div>
+            <h2 style={{ fontSize: '19px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 8px' }}>
+              {closedCopy.title}
+            </h2>
+            <p style={{ fontSize: '14px', color: '#5a6472', lineHeight: 1.6, margin: '0 0 14px' }}>
+              {schedule.message}
             </p>
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit}>
-
-          <div style={{ marginBottom: '22px' }}>
-            <label style={{ display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-              Your Name
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="e.g. Priya Sharma"
-              maxLength={60}
-              required
+            <p style={{ fontSize: '12.5px', color: '#a8b1bd', margin: '0 0 18px', lineHeight: 1.5 }}>
+              This page updates by itself when booking opens — no need to refresh.
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate('/')}
               style={{
-                width: '100%', border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '14px',
-                padding: '15px 16px', fontSize: '15.5px', color: '#1a1a2e', outline: 'none',
-                boxSizing: 'border-box', transition: 'border-color 0.2s, background 0.2s',
+                background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px',
+                padding: '11px 20px', fontSize: '14px', fontWeight: '700', cursor: 'pointer',
               }}
-              onFocus={e => { e.target.style.borderColor = '#2d6a9f'; e.target.style.background = '#ffffff'; }}
-              onBlur={e => { e.target.style.borderColor = '#eef1f5'; e.target.style.background = '#fbfcfe'; }}
-            />
+            >
+              Find another clinic
+            </button>
           </div>
+        ) : (
+          <>
+            {isPaused && (
+              <div style={{
+                background: '#fff8e6', border: '1.5px solid #f5d38a', borderRadius: '14px',
+                padding: '14px 16px', marginBottom: '22px', display: 'flex', gap: '10px', alignItems: 'flex-start',
+              }}>
+                <span style={{ fontSize: '18px' }}>⏸</span>
+                <p style={{ margin: 0, fontSize: '13.5px', color: '#a56a00', lineHeight: 1.45 }}>
+                  The clinic has paused online registrations for now. Please check back in a few minutes — this page updates automatically.
+                </p>
+              </div>
+            )}
 
-          <div style={{ marginBottom: '26px' }}>
-            <label style={{ display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-              Number of People
-            </label>
-            <p style={{ fontSize: '12.5px', color: '#a8b1bd', marginBottom: '14px', marginTop: '2px' }}>
-              Include yourself and anyone with you
-            </p>
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              background: 'linear-gradient(150deg,#f7f9fc,#f0f4f8)', borderRadius: '18px', padding: '10px',
-              border: '1px solid #eef1f5',
-            }}>
-              <button type="button" onClick={() => handleNumChange(numPatients - 1)} style={stepperButton}
-                onMouseDown={e => e.currentTarget.style.transform = 'scale(0.94)'}
-                onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
-              >
-                −
-              </button>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '44px', fontWeight: '900', color: '#1e3a5f', lineHeight: 1 }}>{numPatients}</div>
-                <div style={{ fontSize: '12px', color: '#a8b1bd', marginTop: '3px', fontWeight: '600' }}>
-                  {numPatients === 1 ? 'person' : 'people'}
+            <form onSubmit={handleSubmit}>
+
+              <div style={{ marginBottom: '22px' }}>
+                <label style={{ display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472', marginBottom: '10px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Your Name
+                </label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={e => setName(e.target.value)}
+                  placeholder="e.g. Priya Sharma"
+                  maxLength={60}
+                  required
+                  style={{
+                    width: '100%', border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '14px',
+                    padding: '15px 16px', fontSize: '16px', color: '#1a1a2e', outline: 'none',
+                    boxSizing: 'border-box', transition: 'border-color 0.2s, background 0.2s',
+                  }}
+                  onFocus={e => { e.target.style.borderColor = '#2d6a9f'; e.target.style.background = '#ffffff'; }}
+                  onBlur={e => { e.target.style.borderColor = '#eef1f5'; e.target.style.background = '#fbfcfe'; }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '26px' }}>
+                <label style={{ display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                  Number of People
+                </label>
+                <p style={{ fontSize: '12.5px', color: '#a8b1bd', marginBottom: '14px', marginTop: '2px' }}>
+                  Include yourself and anyone with you
+                </p>
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  background: 'linear-gradient(150deg,#f7f9fc,#f0f4f8)', borderRadius: '18px', padding: '10px',
+                  border: '1px solid #eef1f5',
+                }}>
+                  <button type="button" onClick={() => handleNumChange(numPatients - 1)} style={stepperButton}
+                    onMouseDown={e => e.currentTarget.style.transform = 'scale(0.94)'}
+                    onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  >
+                    −
+                  </button>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '44px', fontWeight: '900', color: '#1e3a5f', lineHeight: 1 }}>{numPatients}</div>
+                    <div style={{ fontSize: '12px', color: '#a8b1bd', marginTop: '3px', fontWeight: '600' }}>
+                      {numPatients === 1 ? 'person' : 'people'}
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => handleNumChange(numPatients + 1)} style={stepperButton}
+                    onMouseDown={e => e.currentTarget.style.transform = 'scale(0.94)'}
+                    onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                  >
+                    +
+                  </button>
                 </div>
               </div>
-              <button type="button" onClick={() => handleNumChange(numPatients + 1)} style={stepperButton}
-                onMouseDown={e => e.currentTarget.style.transform = 'scale(0.94)'}
-                onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+
+              {name.trim() && (
+                <div style={{
+                  background: 'linear-gradient(135deg,#f0f7ff,#e8f2ff)', border: '1.5px solid #d3e6f7',
+                  borderRadius: '14px', padding: '14px 18px', marginBottom: '20px',
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                }}>
+                  <span style={{ fontSize: '18px' }}>👤</span>
+                  <p style={{ margin: 0, fontSize: '13.5px', color: '#2d6a9f', lineHeight: 1.4 }}>
+                    Registering <strong>{name.trim()}</strong>
+                    {numPatients > 1 && <span> + {numPatients - 1} other{numPatients > 2 ? 's' : ''}</span>}
+                  </p>
+                </div>
+              )}
+
+              {error && (
+                <div style={{
+                  background: '#fff0f0', border: '1.5px solid #ffcccc', borderRadius: '14px',
+                  padding: '13px 16px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px',
+                }}>
+                  <span style={{ fontSize: '16px' }}>⚠️</span>
+                  <p style={{ margin: 0, fontSize: '13.5px', color: '#cc0000', lineHeight: 1.45 }}>{error}</p>
+                </div>
+              )}
+
+              <button type="submit" disabled={loading || isPaused}
+                style={{
+                  width: '100%',
+                  background: loading || isPaused ? '#c3c9d1' : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
+                  color: 'white', border: 'none', borderRadius: '16px', padding: '17px',
+                  fontSize: '16px', fontWeight: '700',
+                  cursor: loading || isPaused ? 'not-allowed' : 'pointer',
+                  boxShadow: loading || isPaused ? 'none' : '0 10px 28px rgba(30,58,95,0.32)',
+                  letterSpacing: '0.3px', transition: 'transform 0.15s, box-shadow 0.15s',
+                }}
+                onMouseDown={e => { if (!loading && !isPaused) e.currentTarget.style.transform = 'scale(0.98)'; }}
+                onMouseUp={e => { e.currentTarget.style.transform = 'scale(1)'; }}
               >
-                +
+                {isPaused ? 'Registrations Paused' : loading ? 'Registering...' : 'Get My Token →'}
               </button>
-            </div>
-          </div>
-
-          {name.trim() && (
-            <div style={{
-              background: 'linear-gradient(135deg,#f0f7ff,#e8f2ff)', border: '1.5px solid #d3e6f7',
-              borderRadius: '14px', padding: '14px 18px', marginBottom: '20px',
-              display: 'flex', alignItems: 'center', gap: '10px',
-            }}>
-              <span style={{ fontSize: '18px' }}>👤</span>
-              <p style={{ margin: 0, fontSize: '13.5px', color: '#2d6a9f', lineHeight: 1.4 }}>
-                Registering <strong>{name.trim()}</strong>
-                {numPatients > 1 && <span> + {numPatients - 1} other{numPatients > 2 ? 's' : ''}</span>}
-              </p>
-            </div>
-          )}
-
-          {error && (
-            <div style={{
-              background: '#fff0f0', border: '1.5px solid #ffcccc', borderRadius: '14px',
-              padding: '13px 16px', marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px',
-            }}>
-              <span style={{ fontSize: '16px' }}>⚠️</span>
-              <p style={{ margin: 0, fontSize: '13.5px', color: '#cc0000' }}>{error}</p>
-            </div>
-          )}
-
-          <button type="submit" disabled={loading || isPaused}
-            style={{
-              width: '100%',
-              background: loading || isPaused ? '#c3c9d1' : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
-              color: 'white', border: 'none', borderRadius: '16px', padding: '17px',
-              fontSize: '16px', fontWeight: '700',
-              cursor: loading || isPaused ? 'not-allowed' : 'pointer',
-              boxShadow: loading || isPaused ? 'none' : '0 10px 28px rgba(30,58,95,0.32)',
-              letterSpacing: '0.3px', transition: 'transform 0.15s, box-shadow 0.15s',
-            }}
-            onMouseDown={e => { if (!loading && !isPaused) e.currentTarget.style.transform = 'scale(0.98)'; }}
-            onMouseUp={e => { e.currentTarget.style.transform = 'scale(1)'; }}
-          >
-            {isPaused ? 'Registrations Paused' : loading ? 'Registering...' : 'Get My Token →'}
-          </button>
-        </form>
+            </form>
+          </>
+        )}
 
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginTop: '26px' }}>
           <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#c3e9d8' }} />

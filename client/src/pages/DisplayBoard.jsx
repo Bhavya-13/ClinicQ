@@ -113,7 +113,7 @@ export default function DisplayBoard() {
           <h1 style={{ fontSize: '36px', fontWeight: '900', color: '#1e3a5f', margin: '0 0 4px', letterSpacing: '-0.5px' }}>{clinic.name}</h1>
           <p style={{ color: '#aaa', fontSize: '14px', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#00b894', display: 'inline-block' }} />
-            Live Queue Status
+              Live Queue Status{clinic.schedule?.sessionName ? ` · ${clinic.schedule.sessionName}` : ''}
           </p>
         </div>
         <div className="cq-display-header-right" style={{ textAlign: 'right' }}>
@@ -277,7 +277,7 @@ export default function DisplayBoard() {
 
           <div style={{ ...S.card, padding: '18px', textAlign: 'center' }}>
             <p style={{ color: '#bbb', fontSize: '12px', margin: '0 0 10px', lineHeight: 1.5 }}>
-              Scan the QR code at the entrance to join the queue
+              {clinic.schedule?.bookingOpen === false ? clinic.schedule.message : 'Scan the QR code at the entrance to join the queue'}
             </p>
             <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#ddd', margin: 0 }}>
               CLINIC<span style={{ color: '#2d6a9f' }}>Q</span>

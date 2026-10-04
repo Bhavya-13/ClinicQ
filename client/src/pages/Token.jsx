@@ -44,6 +44,10 @@ export default function Token() {
   const isExisting = location.state?.existing;
   const cameBackAfterSkip = location.state?.rejoined;
 
+  // Is online booking open right now? Updates by itself when a session starts or ends.
+  const schedule = clinic.schedule;
+  const bookingOpen = !schedule || schedule.bookingOpen !== false;
+
   const [patient, setPatient] = useState(null);
   const [fullQueue, setFullQueue] = useState([]);
   const [skippedList, setSkippedList] = useState([]);
@@ -54,7 +58,6 @@ export default function Token() {
   const [wasSkipped, setWasSkipped] = useState(false);
   const [rejoining, setRejoining] = useState(false);
   const [actionError, setActionError] = useState('');
-  const [notice, setNotice] = useState('');
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [cancelling, setCancelling] = useState(false);
 
@@ -73,7 +76,6 @@ export default function Token() {
     setWasSkipped(false);
     setRejoining(false);
     setActionError('');
-    setNotice('');
     setConfirmCancel(false);
     setCancelling(false);
 
@@ -87,6 +89,12 @@ export default function Token() {
       })
       .catch(() => {});
   }, [api, accessToken, fetchPatient]);
+
+  // A session started or ended: ask the server again whether this token is still in the live queue
+  useEffect(() => {
+    socket.on('clinic-updated', fetchPatient);
+    return () => socket.off('clinic-updated', fetchPatient);
+  }, [socket, fetchPatient]);
 
   // Countdown while called and not yet checked in
   useEffect(() => {
@@ -105,7 +113,6 @@ export default function Token() {
     const onCalled = (called) => {
       if (patient && called.id === patient.id) {
         setPatient(prev => ({ ...prev, ...called }));
-        setNotice('');
         const deadline = new Date(called.checkin_deadline).getTime();
         setCountdown(Math.max(0, Math.floor((deadline - Date.now()) / 1000)));
       }
@@ -126,16 +133,6 @@ export default function Token() {
         setWasSkipped(false);
       }
     };
-    // The clinic brought this skipped patient back as next in line
-    const onRecalled = (recalled) => {
-      if (patient && recalled.id === patient.id) {
-        setPatient(prev => ({ ...prev, ...recalled }));
-        setWasSkipped(false);
-        setCheckedIn(false);
-        setCountdown(null);
-        setNotice("The clinic has brought you back into the queue. You're next in line — please stay nearby.");
-      }
-    };
     // Cancelled (for example from another tab on the same phone)
     const onCancelled = (cancelled) => {
       if (patient && cancelled.id === patient.id) {
@@ -152,7 +149,6 @@ export default function Token() {
     socket.on('patient-skipped', onSkipped);
     socket.on('checkin-confirmed', onCheckin);
     socket.on('patient-replaced', onReplaced);
-    socket.on('patient-recalled', onRecalled);
     socket.on('patient-cancelled', onCancelled);
 
     return () => {
@@ -163,7 +159,6 @@ export default function Token() {
       socket.off('patient-skipped', onSkipped);
       socket.off('checkin-confirmed', onCheckin);
       socket.off('patient-replaced', onReplaced);
-      socket.off('patient-recalled', onRecalled);
       socket.off('patient-cancelled', onCancelled);
     };
   }, [patient, socket]);
@@ -180,6 +175,7 @@ export default function Token() {
     }
   };
 
+  // Used by both "Rejoin Queue" (skipped) and "Join the new queue" (session ended)
   const handleRejoin = async () => {
     setRejoining(true);
     setActionError('');
@@ -189,7 +185,7 @@ export default function Token() {
       if (data.success) {
         navigate(`/c/${slug}/token/${data.patient.access_token}`);
       } else {
-        setActionError(data.error || 'Could not rejoin the queue.');
+        setActionError(data.error || 'Could not join the queue.');
         setRejoining(false);
         fetchPatient(); // show this token's real status
       }
@@ -235,10 +231,12 @@ export default function Token() {
 
   const isReplaced = patient?.status === 'done' && patient?.checkin_status === 'replaced';
   const isCancelled = patient?.status === 'done' && patient?.checkin_status === 'cancelled';
-  const isSkipped = (patient?.status === 'skipped' || wasSkipped) && !rejoining && !isReplaced && !isCancelled;
+  // Still waiting (or skipped) in a queue that has already closed
+  const isEnded = !!patient?.queueEnded && ['waiting', 'called', 'skipped'].includes(patient.status);
+  const isSkipped = (patient?.status === 'skipped' || wasSkipped) && !rejoining && !isReplaced && !isCancelled && !isEnded;
   const isRejoined = patient?.checkin_status === 'rejoined';
-  const isCalled = patient?.status === 'called';
-  const isWaiting = patient?.status === 'waiting';
+  const isCalled = patient?.status === 'called' && !isEnded;
+  const isWaiting = patient?.status === 'waiting' && !isEnded;
   const isDone = patient?.status === 'done' && !isReplaced && !isCancelled;
   const canCancel = isWaiting || (isCalled && !checkedIn);
   const registeredAt = formatRegisteredAt(patient?.created_at);
@@ -260,7 +258,7 @@ export default function Token() {
       <div style={{ maxWidth: '340px' }}>
         <h1 style={{ fontSize: '20px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 8px' }}>Token not found</h1>
         <p style={{ color: '#8a94a3', fontSize: '14px', margin: '0 0 20px', lineHeight: 1.5 }}>
-          This token may be from a previous day. You can join today's queue at {clinic.name}.
+          This token may be from a previous day. You can join the next queue at {clinic.name}.
         </p>
         <button
           onClick={() => navigate(`/c/${slug}/register`)}
@@ -278,7 +276,7 @@ export default function Token() {
 
         <TopBar clinicName={clinic.name} />
 
-        {cameBackAfterSkip && !isReplaced && !isCancelled && (
+        {cameBackAfterSkip && !isReplaced && !isCancelled && !isEnded && (
           <div style={{ background: 'linear-gradient(135deg,#e67e22,#f39c12)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
             <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0, lineHeight: 1.45 }}>
               Welcome back! You were skipped earlier, so you've rejoined at the end of the queue.
@@ -286,7 +284,7 @@ export default function Token() {
           </div>
         )}
 
-        {isExisting && !cameBackAfterSkip && !isCancelled && (
+        {isExisting && !cameBackAfterSkip && !isCancelled && !isEnded && (
           <div style={{ background: 'linear-gradient(135deg,#0984e3,#74b9ff)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
             <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0 }}>
               Welcome back! You already have an active token today.
@@ -294,15 +292,9 @@ export default function Token() {
           </div>
         )}
 
-        {notice && (
-          <div style={{ background: 'linear-gradient(135deg,#00b894,#00cec9)', borderRadius: '16px', padding: '14px 18px', marginBottom: '16px', textAlign: 'center' }}>
-            <p style={{ color: 'white', fontWeight: '700', fontSize: '14px', margin: 0, lineHeight: 1.45 }}>{notice}</p>
-          </div>
-        )}
-
         {actionError && (
           <div style={{ background: '#fff0f0', border: '1.5px solid #ffcccc', borderRadius: '14px', padding: '12px 16px', marginBottom: '16px' }}>
-            <p style={{ margin: 0, fontSize: '13px', color: '#cc0000' }}>{actionError}</p>
+            <p style={{ margin: 0, fontSize: '13px', color: '#cc0000', lineHeight: 1.45 }}>{actionError}</p>
           </div>
         )}
 
@@ -311,7 +303,7 @@ export default function Token() {
             <div style={{ fontSize: '26px', marginBottom: '8px' }}>🔁</div>
             <p style={{ color: '#1e3a5f', fontWeight: '800', fontSize: '17px', margin: '0 0 6px' }}>This token is no longer active</p>
             <p style={{ color: '#6b7684', fontSize: '13px', margin: '0 0 16px', lineHeight: 1.5 }}>
-              You rejoined the queue with a newer token. Please use that one. If you no longer have it, you can join the queue again.
+              You joined the queue again with a newer token. Please use that one. If you no longer have it, you can join the queue again.
             </p>
             <button
               onClick={() => navigate(`/c/${slug}/register`)}
@@ -335,6 +327,36 @@ export default function Token() {
             >
               Join the Queue Again
             </button>
+          </div>
+        )}
+
+        {/* ── This token's queue has ended (leftover from an earlier session) ── */}
+        {isEnded && (
+          <div style={{ background: 'white', border: '2px solid #dbe6f3', borderRadius: '20px', padding: '22px', marginBottom: '16px', textAlign: 'center' }}>
+            <div style={{ fontSize: '28px', marginBottom: '8px' }}>🕒</div>
+            <p style={{ color: '#1e3a5f', fontWeight: '800', fontSize: '18px', margin: '0 0 8px' }}>This queue has ended</p>
+            <p style={{ color: '#6b7684', fontSize: '13.5px', margin: '0 0 16px', lineHeight: 1.55 }}>
+              You weren't seen before this queue closed, so token #{patient.token_number} is no longer active. Tokens don't carry over to the next session.
+            </p>
+
+            {bookingOpen ? (
+              <>
+                <p style={{ color: '#00875f', background: '#e8f8f5', borderRadius: '12px', padding: '10px 14px', fontSize: '13.5px', fontWeight: '600', margin: '0 0 14px', lineHeight: 1.5 }}>
+                  {schedule?.sessionName ? `${schedule.sessionName} booking is open now.` : 'Booking is open now.'} You can join its queue — you'll be added at the end, like everyone else joining now.
+                </p>
+                <button
+                  onClick={handleRejoin}
+                  disabled={rejoining}
+                  style={{ width: '100%', background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '14px', fontSize: '15px', fontWeight: '800', cursor: rejoining ? 'not-allowed' : 'pointer', opacity: rejoining ? 0.7 : 1 }}
+                >
+                  {rejoining ? 'Joining...' : schedule?.sessionName ? `Join ${schedule.sessionName} queue →` : 'Join the queue →'}
+                </button>
+              </>
+            ) : (
+              <p style={{ color: '#5a6472', background: '#f5f8fc', border: '1px solid #dbe6f3', borderRadius: '12px', padding: '12px 14px', fontSize: '13.5px', fontWeight: '600', margin: 0, lineHeight: 1.55 }}>
+                {schedule?.message || 'Booking is not open right now.'} This page will update by itself when you can join again.
+              </p>
+            )}
           </div>
         )}
 
@@ -366,19 +388,27 @@ export default function Token() {
           <div style={{ background: 'linear-gradient(135deg,#d63031,#e17055)', borderRadius: '20px', padding: '24px', marginBottom: '16px', textAlign: 'center', boxShadow: '0 8px 24px rgba(214,48,49,0.35)' }}>
             <div style={{ fontSize: '28px', marginBottom: '8px' }}>⏰</div>
             <p style={{ color: 'white', fontWeight: '800', fontSize: '18px', margin: '0 0 6px' }}>You were skipped</p>
-            <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', margin: '0 0 16px' }}>
+            <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '13px', margin: '0 0 16px', lineHeight: 1.5 }}>
               {patient.skip_reason === 'manual'
-                ? 'The clinic skipped your turn. Please rejoin the queue.'
+                ? 'The clinic skipped your turn.'
                 : 'You did not check in within the time limit.'}
+              {bookingOpen ? ' You can rejoin at the end of the queue.' : ''}
             </p>
-            <button onClick={handleRejoin} disabled={rejoining}
-              style={{ width: '100%', background: 'white', color: '#d63031', border: 'none', borderRadius: '12px', padding: '14px', fontSize: '15px', fontWeight: '800', cursor: rejoining ? 'not-allowed' : 'pointer', opacity: rejoining ? 0.7 : 1 }}>
-              {rejoining ? 'Rejoining...' : 'Rejoin Queue →'}
-            </button>
+
+            {bookingOpen ? (
+              <button onClick={handleRejoin} disabled={rejoining}
+                style={{ width: '100%', background: 'white', color: '#d63031', border: 'none', borderRadius: '12px', padding: '14px', fontSize: '15px', fontWeight: '800', cursor: rejoining ? 'not-allowed' : 'pointer', opacity: rejoining ? 0.7 : 1 }}>
+                {rejoining ? 'Rejoining...' : 'Rejoin Queue →'}
+              </button>
+            ) : (
+              <p style={{ background: 'rgba(255,255,255,0.18)', borderRadius: '12px', padding: '12px 14px', color: 'white', fontSize: '13px', fontWeight: '600', margin: 0, lineHeight: 1.5 }}>
+                You can't rejoin right now. {schedule?.message}
+              </p>
+            )}
           </div>
         )}
 
-        <div style={{ background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', border: '2px dashed #e8eef5', boxSizing: 'border-box', opacity: isReplaced || isCancelled ? 0.55 : 1 }}>
+        <div style={{ background: 'white', borderRadius: '20px', padding: '24px', marginBottom: '16px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', border: '2px dashed #e8eef5', boxSizing: 'border-box', opacity: isReplaced || isCancelled || isEnded ? 0.55 : 1 }}>
 
           <p style={{ textAlign: 'center', fontSize: '11px', fontWeight: '700', color: '#bbb', letterSpacing: '2px', textTransform: 'uppercase', marginBottom: '4px' }}>
             Token Number
@@ -403,7 +433,8 @@ export default function Token() {
           <div style={{ textAlign: 'center', marginTop: '10px' }}>
             {isReplaced && <span style={{ ...S.badge, background: '#f0f0f0', color: '#888' }}>Replaced by a newer token</span>}
             {isCancelled && <span style={{ ...S.badge, background: '#f0f0f0', color: '#888' }}>Cancelled</span>}
-            {isRejoined && !isCalled && !isSkipped && !isReplaced && !isCancelled && (
+            {isEnded && <span style={{ ...S.badge, background: '#f0f0f0', color: '#888' }}>Queue ended</span>}
+            {isRejoined && !isCalled && !isSkipped && !isReplaced && !isCancelled && !isEnded && (
               <span style={{ ...S.badge, background: '#fff3e0', color: '#e67e22' }}>Back in the queue after a skip</span>
             )}
             {isSkipped && <span style={{ ...S.badge, background: '#fff0f0', color: '#e74c3c' }}>Skipped</span>}
@@ -422,7 +453,7 @@ export default function Token() {
             <p style={{ fontSize: '11px', color: '#bbb', fontWeight: '700', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '4px' }}>
               {patient.num_patients === 1 ? 'Patient' : 'Registered By'}
             </p>
-            <p style={{ fontSize: '18px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>{formatNames(patient.names)}</p>
+            <p style={{ fontSize: '18px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px', wordBreak: 'break-word' }}>{formatNames(patient.names)}</p>
             {patient.num_patients > 1 && (
               <p style={{ fontSize: '12px', color: '#bbb', margin: 0 }}>Group of {patient.num_patients} people</p>
             )}
@@ -501,79 +532,82 @@ export default function Token() {
           </div>
         )}
 
-        <div style={S.card}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: 0 }}>Live Queue</h2>
-            <span style={{ background: '#f0f4f8', color: '#888', fontSize: '12px', fontWeight: '600', padding: '4px 10px', borderRadius: '20px' }}>
-              {activeQueue.length} waiting
-            </span>
-          </div>
+        {/* The live queue belongs to the current session, so leftover tokens don't show it */}
+        {!isEnded && (
+          <div style={S.card}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: 0 }}>Live Queue</h2>
+              <span style={{ background: '#f0f4f8', color: '#888', fontSize: '12px', fontWeight: '600', padding: '4px 10px', borderRadius: '20px' }}>
+                {activeQueue.length} waiting
+              </span>
+            </div>
 
-          {activeQueue.length === 0 ? (
-            <p style={{ textAlign: 'center', color: '#bbb', fontSize: '14px', padding: '16px 0' }}>Queue is empty</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
-              {activeQueue.map((entry, entryIndex) => {
-                const isMe = entry.id === patient.id;
-                const entryRejoined = entry.checkin_status === 'rejoined';
-                const entryCalled = entry.status === 'called';
-                const peopleBeforeEntry = activeQueue.slice(0, entryIndex).reduce((sum, p) => sum + p.num_patients, 0);
-                const entryEstimate = avgMins !== null && entryIndex > 0 ? Math.round(peopleBeforeEntry * avgMins) : null;
+            {activeQueue.length === 0 ? (
+              <p style={{ textAlign: 'center', color: '#bbb', fontSize: '14px', padding: '16px 0' }}>Queue is empty</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '320px', overflowY: 'auto' }}>
+                {activeQueue.map((entry, entryIndex) => {
+                  const isMe = entry.id === patient.id;
+                  const entryRejoined = entry.checkin_status === 'rejoined';
+                  const entryCalled = entry.status === 'called';
+                  const peopleBeforeEntry = activeQueue.slice(0, entryIndex).reduce((sum, p) => sum + p.num_patients, 0);
+                  const entryEstimate = avgMins !== null && entryIndex > 0 ? Math.round(peopleBeforeEntry * avgMins) : null;
 
-                return (
-                  <div key={entry.id} style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '12px 14px', borderRadius: '12px',
-                    background: isMe ? '#f0f7ff' : entryCalled ? '#fffbf0' : entryRejoined ? '#fff8f0' : '#f9f9f9',
-                    border: `2px solid ${isMe ? '#2d6a9f' : entryCalled ? '#f39c12' : entryRejoined ? '#e67e22' : '#efefef'}`,
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <span style={{ fontFamily: 'monospace', fontWeight: '800', fontSize: '16px', color: isMe ? '#1e3a5f' : '#bbb' }}>
-                        #{entry.token_number}{entryRejoined && <span style={{ color: '#e67e22', fontSize: '11px' }}>R</span>}
-                      </span>
-                      <div>
-                        <p style={{ margin: 0, fontSize: '14px', fontWeight: isMe ? '700' : '500', color: isMe ? '#1e3a5f' : '#444' }}>
-                          {isMe ? 'You' : formatNames(entry.names)}
-                        </p>
-                        <p style={{ margin: 0, fontSize: '11px', color: '#bbb' }}>
-                          {entry.num_patients > 1 ? `Group of ${entry.num_patients}` : '1 person'}
-                          {entryEstimate !== null && !entryCalled && (
-                            <span style={{ color: '#e67e22', marginLeft: '6px' }}>· ~{entryEstimate} min wait</span>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                    <span style={{
-                      fontSize: '11px', fontWeight: '700', padding: '4px 10px', borderRadius: '20px',
-                      background: entryCalled ? '#fef3cd' : entryRejoined ? '#fde8d0' : isMe ? '#dbeafe' : '#f0f0f0',
-                      color: entryCalled ? '#d68910' : entryRejoined ? '#e67e22' : isMe ? '#1e3a5f' : '#bbb',
+                  return (
+                    <div key={entry.id} style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                      padding: '12px 14px', borderRadius: '12px',
+                      background: isMe ? '#f0f7ff' : entryCalled ? '#fffbf0' : entryRejoined ? '#fff8f0' : '#f9f9f9',
+                      border: `2px solid ${isMe ? '#2d6a9f' : entryCalled ? '#f39c12' : entryRejoined ? '#e67e22' : '#efefef'}`,
                     }}>
-                      {entryCalled ? 'Called' : entryRejoined ? 'Rejoined' : isMe ? 'You' : 'Waiting'}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
+                        <span style={{ fontFamily: 'monospace', fontWeight: '800', fontSize: '16px', color: isMe ? '#1e3a5f' : '#bbb' }}>
+                          #{entry.token_number}{entryRejoined && <span style={{ color: '#e67e22', fontSize: '11px' }}>R</span>}
+                        </span>
+                        <div style={{ minWidth: 0 }}>
+                          <p style={{ margin: 0, fontSize: '14px', fontWeight: isMe ? '700' : '500', color: isMe ? '#1e3a5f' : '#444', wordBreak: 'break-word' }}>
+                            {isMe ? 'You' : formatNames(entry.names)}
+                          </p>
+                          <p style={{ margin: 0, fontSize: '11px', color: '#bbb' }}>
+                            {entry.num_patients > 1 ? `Group of ${entry.num_patients}` : '1 person'}
+                            {entryEstimate !== null && !entryCalled && (
+                              <span style={{ color: '#e67e22', marginLeft: '6px' }}>· ~{entryEstimate} min wait</span>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+                      <span style={{
+                        fontSize: '11px', fontWeight: '700', padding: '4px 10px', borderRadius: '20px',
+                        background: entryCalled ? '#fef3cd' : entryRejoined ? '#fde8d0' : isMe ? '#dbeafe' : '#f0f0f0',
+                        color: entryCalled ? '#d68910' : entryRejoined ? '#e67e22' : isMe ? '#1e3a5f' : '#bbb',
+                      }}>
+                        {entryCalled ? 'Called' : entryRejoined ? 'Rejoined' : isMe ? 'You' : 'Waiting'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
-          {activeQueue.some(e => e.checkin_status === 'rejoined') && (
-            <div style={{ marginTop: '12px', background: '#fff8f0', border: '1px solid #fde8d0', borderRadius: '10px', padding: '10px 14px' }}>
-              <p style={{ margin: 0, fontSize: '12px', color: '#e67e22' }}>
-                <strong>R</strong> = This person was skipped earlier and has come back. They are not skipping the line.
-              </p>
-            </div>
-          )}
-        </div>
+            {activeQueue.some(e => e.checkin_status === 'rejoined') && (
+              <div style={{ marginTop: '12px', background: '#fff8f0', border: '1px solid #fde8d0', borderRadius: '10px', padding: '10px 14px' }}>
+                <p style={{ margin: 0, fontSize: '12px', color: '#e67e22', lineHeight: 1.45 }}>
+                  <strong>R</strong> = This person was skipped earlier and has come back. They are not skipping the line.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
 
-        {skippedList.length > 0 && (
+        {!isEnded && skippedList.length > 0 && (
           <div style={S.card}>
             <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Recently Skipped</h2>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {skippedList.map(entry => (
                 <div key={entry.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: '12px', background: '#fff5f5', border: '1.5px solid #ffd5d5' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
                     <span style={{ fontFamily: 'monospace', fontWeight: '800', fontSize: '15px', color: '#e74c3c' }}>#{entry.token_number}</span>
-                    <span style={{ fontSize: '14px', color: '#666' }}>{formatNames(entry.names)}</span>
+                    <span style={{ fontSize: '14px', color: '#666', wordBreak: 'break-word' }}>{formatNames(entry.names)}</span>
                   </div>
                   <span style={{ fontSize: '11px', fontWeight: '700', background: '#ffd5d5', color: '#e74c3c', padding: '4px 10px', borderRadius: '20px' }}>No-show</span>
                 </div>

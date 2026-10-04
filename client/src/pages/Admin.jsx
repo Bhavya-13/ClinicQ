@@ -308,6 +308,11 @@ export default function Admin() {
               Clinic<span style={{ color: '#2d6a9f' }}>Q</span> · Staff
             </p>
             <h1 style={{ fontSize: '26px', fontWeight: '900', color: '#1e3a5f', margin: 0 }}>{clinic.name}</h1>
+                        {clinic.schedule?.mode === 'sessions' && clinic.schedule.sessionLabel && (
+              <p style={{ margin: '6px 0 0', fontSize: '13px', fontWeight: '700', color: '#2d6a9f' }}>
+                🕒 {clinic.schedule.sessionLabel}
+              </p>
+            )}
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span style={{ ...S.pill, background: '#dbeafe', color: '#1e3a5f' }}>
@@ -352,6 +357,14 @@ export default function Admin() {
         {isPaused && (
           <div style={{ background: '#fff3e0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
             <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px', lineHeight: 1.45 }}>⏸ Online registrations are paused. Patients cannot join by themselves — you can still add walk-in patients below.</p>
+          </div>
+        )}
+
+        {!isPaused && clinic.schedule?.mode === 'sessions' && !clinic.schedule.bookingOpen && (
+          <div style={{ background: '#f0f7ff', border: '1.5px solid #cce0f5', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
+            <p style={{ margin: 0, color: '#2d6a9f', fontWeight: '600', fontSize: '14px', lineHeight: 1.5 }}>
+              🕒 Online booking is closed. {clinic.schedule.message} You can keep serving the queue and add walk-ins.
+            </p>
           </div>
         )}
 

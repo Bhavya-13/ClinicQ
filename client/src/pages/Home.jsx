@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import SERVER from '../config';
 
+const REFRESH_MS = 60000; // statuses like "Booking opens at 3 PM" stay fresh
+
 function searchableText(clinic) {
   return [clinic.name, clinic.doctor_name, clinic.specialty, clinic.area, clinic.city, clinic.address]
     .filter(Boolean)
@@ -9,9 +11,33 @@ function searchableText(clinic) {
     .toLowerCase();
 }
 
+// Small status line: is booking open, and if not, why and when
+function StatusChip({ schedule }) {
+  if (!schedule || schedule.mode !== 'sessions') return null;
+
+  const open = schedule.bookingOpen;
+  const closedDay = schedule.reason === 'closed_day';
+  const look = open
+    ? { bg: '#e8f8f5', color: '#00875f', dot: '#00b894' }
+    : closedDay
+      ? { bg: '#f1f3f6', color: '#6b7684', dot: '#a8b1bd' }
+      : { bg: '#fff3e0', color: '#c47f0a', dot: '#f39c12' };
+
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '7px', padding: '5px 12px', borderRadius: '20px',
+      background: look.bg, color: look.color, fontSize: '12.5px', fontWeight: '700', lineHeight: 1.3,
+    }}>
+      <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: look.dot, flexShrink: 0 }} />
+      {open && schedule.sessionName ? `${schedule.sessionName} · ` : ''}{schedule.shortMessage}
+    </span>
+  );
+}
+
 function ClinicCard({ clinic }) {
   const doctorLine = [clinic.doctor_name, clinic.specialty].filter(Boolean).join(' · ');
   const placeLine = [clinic.area, clinic.city].filter(Boolean).join(', ');
+  const bookingClosed = clinic.schedule && clinic.schedule.bookingOpen === false;
 
   return (
     <div style={{
@@ -23,7 +49,7 @@ function ClinicCard({ clinic }) {
       <div style={{ flex: '1 1 240px', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginBottom: '4px' }}>
           <h3 style={{ fontSize: '17px', fontWeight: '800', color: '#1e3a5f', margin: 0 }}>{clinic.name}</h3>
-          {clinic.is_paused && (
+          {clinic.is_paused && !bookingClosed && (
             <span style={{ fontSize: '11px', fontWeight: '700', padding: '3px 10px', borderRadius: '20px', background: '#fff3e0', color: '#d68910' }}>
               Registrations paused
             </span>
@@ -33,16 +59,22 @@ function ClinicCard({ clinic }) {
         {placeLine && <p style={{ fontSize: '13px', color: '#6b7684', margin: '0 0 2px' }}>📍 {placeLine}</p>}
         {clinic.address && <p style={{ fontSize: '12.5px', color: '#a8b1bd', margin: '0 0 2px' }}>{clinic.address}</p>}
         {clinic.timings && <p style={{ fontSize: '13px', color: '#6b7684', margin: '4px 0 0' }}>🕒 {clinic.timings}</p>}
+        <div style={{ marginTop: '10px' }}>
+          <StatusChip schedule={clinic.schedule} />
+        </div>
       </div>
       <Link
         to={`/c/${clinic.slug}/register`}
-        style={{
+        style={bookingClosed ? {
+          background: 'white', color: '#2d6a9f', textDecoration: 'none', border: '2px solid #dbeafe',
+          borderRadius: '14px', padding: '10px 20px', fontSize: '14px', fontWeight: '700', whiteSpace: 'nowrap',
+        } : {
           background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', textDecoration: 'none',
           borderRadius: '14px', padding: '12px 20px', fontSize: '14px', fontWeight: '700',
           boxShadow: '0 6px 18px rgba(30,58,95,0.25)', whiteSpace: 'nowrap',
         }}
       >
-        Get token →
+        {bookingClosed ? 'View details →' : 'Get token →'}
       </Link>
     </div>
   );
@@ -71,6 +103,22 @@ export default function Home() {
       });
     return () => controller.abort();
   }, [reloadKey]);
+
+  // Quietly refresh every minute so "booking opens at…" never goes stale
+  useEffect(() => {
+    if (status !== 'ready') return undefined;
+    const controller = new AbortController();
+    const timer = setInterval(() => {
+      fetch(`${SERVER}/api/public/clinics`, { cache: 'no-store', signal: controller.signal })
+        .then(res => (res.ok ? res.json() : null))
+        .then(data => { if (data?.clinics) setClinics(data.clinics); })
+        .catch(() => {});
+    }, REFRESH_MS);
+    return () => {
+      clearInterval(timer);
+      controller.abort();
+    };
+  }, [status]);
 
   // Every word typed must appear somewhere in the clinic's details
   const results = useMemo(() => {
