@@ -45,8 +45,8 @@ const WEEK_DAYS = [
   { n: 1, label: 'Mon' }, { n: 2, label: 'Tue' }, { n: 3, label: 'Wed' }, { n: 4, label: 'Thu' },
   { n: 5, label: 'Fri' }, { n: 6, label: 'Sat' }, { n: 0, label: 'Sun' },
 ];
-const OPEN_BEFORE_OPTIONS = [0, 15, 30, 45, 60, 90, 120, 150, 180, 240, 360];
-const CLOSE_BEFORE_OPTIONS = [0, 15, 30, 45, 60, 90, 120];
+const OPEN_BEFORE_OPTIONS = [0, 30, 60, 90, 120, 180, 240];
+const CLOSE_BEFORE_OPTIONS = [0, 15, 30, 45, 60, 90];
 
 const DEFAULT_NEW_SESSIONS = [
   { name: 'Morning', startTime: '09:00', endTime: '13:00' },
@@ -59,12 +59,14 @@ function newSession(existing) {
   return { ...base, opensBeforeMin: 120, closesBeforeMin: 30, closedDays: [] };
 }
 
-function minutesLabel(m) {
+// 0 → "At the time", 30 → "30 min", 90 → "1.5 hr", 120 → "2 hr"
+function shortMinutes(m) {
+  if (m === 0) return 'Right at';
   if (m < 60) return `${m} min`;
-  if (m % 60 === 0) return `${m / 60} hour${m > 60 ? 's' : ''}`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return `${+(m / 60).toFixed(2)} hr`;
 }
 
+// If a saved value isn't one of the usual choices, still show it (selected)
 function optionsWith(list, value) {
   return list.includes(value) ? list : [...list, value].sort((a, b) => a - b);
 }
@@ -120,11 +122,21 @@ function sessionSummary(clinic) {
     .join(' · ');
 }
 
+// Small down-arrow used by the dropdown
+const CHEVRON =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%232d6a9f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")";
+
 const S = {
   page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px', boxSizing: 'border-box' },
   card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box', marginBottom: '20px' },
   label: { display: 'block', fontSize: '11.5px', fontWeight: '700', color: '#5a6472', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '1px' },
   input: { width: '100%', border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '12px', padding: '12px 14px', fontSize: '15px', color: '#1a1a2e', outline: 'none', boxSizing: 'border-box' },
+  select: {
+    width: '100%', border: '2px solid #eef1f5', borderRadius: '12px', padding: '12px 40px 12px 14px',
+    fontSize: '15px', color: '#1a1a2e', outline: 'none', boxSizing: 'border-box', cursor: 'pointer',
+    appearance: 'none', WebkitAppearance: 'none', MozAppearance: 'none',
+    backgroundColor: '#fbfcfe', backgroundImage: CHEVRON, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 14px center',
+  },
   primary: { background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '12px 20px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' },
   secondary: { background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '8px 14px', fontSize: '13px', fontWeight: '700', cursor: 'pointer' },
   error: { color: '#cc0000', fontSize: '13px', margin: '0 0 12px' },
@@ -132,6 +144,35 @@ const S = {
   sectionTitle: { fontSize: '13px', fontWeight: '800', color: '#1e3a5f', margin: '6px 0 12px' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '14px', marginBottom: '14px' },
 };
+
+// A row of tap-to-select pills (used instead of a dropdown)
+function PillPicker({ options, value, onChange, format }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+      {options.map(option => {
+        const selected = option === value;
+        return (
+          <button
+            type="button"
+            key={option}
+            onClick={() => onChange(option)}
+            aria-pressed={selected}
+            style={{
+              padding: '9px 16px', borderRadius: '999px', fontSize: '13.5px', fontWeight: '700', cursor: 'pointer',
+              border: selected ? '2px solid #1e3a5f' : '2px solid #e3e9f1',
+              background: selected ? 'linear-gradient(135deg,#1e3a5f,#2d6a9f)' : 'white',
+              color: selected ? 'white' : '#5a6472',
+              boxShadow: selected ? '0 4px 12px rgba(30,58,95,0.25)' : 'none',
+              transition: 'all 0.15s',
+            }}
+          >
+            {format(option)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 // Shared "public listing" inputs used by both the create and edit forms
 function ListingFields({ values, onChange }) {
@@ -185,10 +226,10 @@ function SessionsEditor({ sessions, onChange }) {
         const endMin = toMinutes(s.endTime);
         const valid = startMin !== null && endMin !== null && startMin !== endMin;
         return (
-          <div key={i} style={{ background: '#f7f9fc', border: '1px solid #eef1f5', borderRadius: '14px', padding: '16px', marginBottom: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <span style={{ fontSize: '13px', fontWeight: '800', color: '#1e3a5f' }}>Session {i + 1}</span>
-              <button type="button" style={{ ...S.secondary, color: '#cc0000', borderColor: '#ffd5d5', padding: '4px 10px', fontSize: '12px' }} onClick={() => remove(i)}>
+          <div key={i} style={{ background: '#f7f9fc', border: '1px solid #eef1f5', borderRadius: '16px', padding: '18px', marginBottom: '14px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <span style={{ fontSize: '14px', fontWeight: '800', color: '#1e3a5f' }}>Session {i + 1}</span>
+              <button type="button" style={{ ...S.secondary, color: '#cc0000', borderColor: '#ffd5d5', padding: '5px 12px', fontSize: '12px' }} onClick={() => remove(i)}>
                 Remove
               </button>
             </div>
@@ -205,28 +246,30 @@ function SessionsEditor({ sessions, onChange }) {
               <div>
                 <label style={S.label}>Ends</label>
                 <input style={S.input} type="time" value={s.endTime} onChange={e => update(i, { endTime: e.target.value })} />
-                <p style={S.hint}>An end time earlier than the start means it runs past midnight.</p>
-              </div>
-              <div>
-                <label style={S.label}>Booking opens</label>
-                <select style={S.input} value={s.opensBeforeMin} onChange={e => update(i, { opensBeforeMin: Number(e.target.value) })}>
-                  {optionsWith(OPEN_BEFORE_OPTIONS, s.opensBeforeMin).map(m => (
-                    <option key={m} value={m}>{m === 0 ? 'At the start time' : `${minutesLabel(m)} before start`}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label style={S.label}>Booking closes</label>
-                <select style={S.input} value={s.closesBeforeMin} onChange={e => update(i, { closesBeforeMin: Number(e.target.value) })}>
-                  {optionsWith(CLOSE_BEFORE_OPTIONS, s.closesBeforeMin).map(m => (
-                    <option key={m} value={m}>{m === 0 ? 'At the end time' : `${minutesLabel(m)} before end`}</option>
-                  ))}
-                </select>
               </div>
             </div>
+            <p style={{ ...S.hint, margin: '-6px 0 16px' }}>An end time earlier than the start time means the session runs past midnight.</p>
+
+            <label style={S.label}>Booking opens</label>
+            <PillPicker
+              options={optionsWith(OPEN_BEFORE_OPTIONS, s.opensBeforeMin)}
+              value={s.opensBeforeMin}
+              onChange={(v) => update(i, { opensBeforeMin: v })}
+              format={shortMinutes}
+            />
+            <p style={{ ...S.hint, margin: '6px 0 16px' }}>before the session starts</p>
+
+            <label style={S.label}>Booking closes</label>
+            <PillPicker
+              options={optionsWith(CLOSE_BEFORE_OPTIONS, s.closesBeforeMin)}
+              value={s.closesBeforeMin}
+              onChange={(v) => update(i, { closesBeforeMin: v })}
+              format={shortMinutes}
+            />
+            <p style={{ ...S.hint, margin: '6px 0 16px' }}>before the session ends</p>
 
             <label style={S.label}>Closed on</label>
-            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               {WEEK_DAYS.map(({ n, label }) => {
                 const closed = s.closedDays.includes(n);
                 return (
@@ -234,11 +277,13 @@ function SessionsEditor({ sessions, onChange }) {
                     type="button"
                     key={n}
                     onClick={() => toggleDay(i, n)}
+                    aria-pressed={closed}
                     style={{
-                      padding: '8px 12px', borderRadius: '10px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
-                      border: closed ? '2px solid #f5b5b5' : '2px solid #dbeafe',
+                      padding: '9px 14px', borderRadius: '999px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+                      border: closed ? '2px solid #f5b5b5' : '2px solid #e3e9f1',
                       background: closed ? '#fff0f0' : 'white',
-                      color: closed ? '#cc0000' : '#2d6a9f',
+                      color: closed ? '#cc0000' : '#5a6472',
+                      transition: 'all 0.15s',
                     }}
                   >
                     {label}{closed ? ' ✕' : ''}
@@ -249,9 +294,11 @@ function SessionsEditor({ sessions, onChange }) {
             <p style={S.hint}>Tap a day to mark this session closed on that day.</p>
 
             {valid && (
-              <p style={{ fontSize: '12.5px', color: '#2d6a9f', fontWeight: '600', margin: '12px 0 0' }}>
-                Booking opens {formatMinutes(startMin - s.opensBeforeMin)} · closes {formatMinutes(endMin - s.closesBeforeMin)} · session ends {formatMinutes(endMin)}{endMin < startMin ? ' (next day)' : ''}
-              </p>
+              <div style={{ background: '#eaf3fc', border: '1px solid #d3e6f7', borderRadius: '12px', padding: '10px 14px', marginTop: '16px' }}>
+                <p style={{ fontSize: '12.5px', color: '#2d6a9f', fontWeight: '600', margin: 0, lineHeight: 1.5 }}>
+                  Booking opens <strong>{formatMinutes(startMin - s.opensBeforeMin)}</strong> · closes <strong>{formatMinutes(endMin - s.closesBeforeMin)}</strong> · session ends <strong>{formatMinutes(endMin)}</strong>{endMin < startMin ? ' (next day)' : ''}
+                </p>
+              </div>
             )}
           </div>
         );
@@ -352,7 +399,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
         {sessions.length === 0 && (
           <div>
             <label style={S.label}>Token numbers reset at</label>
-            <select style={S.input} value={hour} onChange={e => setHour(Number(e.target.value))}>
+            <select style={S.select} value={hour} onChange={e => setHour(Number(e.target.value))}>
               {HOURS.map(h => <option key={h} value={h}>{formatHour(h)} (IST)</option>)}
             </select>
             <p style={S.hint}>Only used when no sessions are set below.</p>
@@ -516,7 +563,7 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
             {sessions.length === 0 && (
               <div>
                 <label style={S.label}>Token numbers reset at</label>
-                <select style={S.input} value={hour} onChange={e => setHour(Number(e.target.value))}>
+                <select style={S.select} value={hour} onChange={e => setHour(Number(e.target.value))}>
                   {HOURS.map(h => <option key={h} value={h}>{formatHour(h)} (IST)</option>)}
                 </select>
                 <p style={S.hint}>Only used when no sessions are set below.</p>
