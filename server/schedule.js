@@ -82,6 +82,11 @@ function untilText(ms, nowMs) {
   return istDateKey(ms) === istDateKey(nowMs) ? timeLabel(ms) : whenText(ms, nowMs);
 }
 
+// ["Morning"] → "Morning", ["Morning","Evening"] → "Morning and Evening"
+function joinNames(names) {
+  return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
 // ── Sessions → concrete time windows ───────────────────────────────
 function durationMin(startMin, endMin) {
   const d = (endMin - startMin + DAY_MIN) % DAY_MIN;
@@ -136,6 +141,7 @@ function buildInstances(sessions, nowMs) {
 //   active      – the session whose queue is live (from its booking opening until
 //                 the NEXT session's booking opens)
 //   bookingOpen – patients may join right now
+//   message     – when booking is closed, the REASON (shown to patients)
 function getStatus(sessionRows, nowMs = Date.now()) {
   const sessions = (sessionRows || [])
     .map(sessionFromRow)
@@ -143,7 +149,10 @@ function getStatus(sessionRows, nowMs = Date.now()) {
 
   // No sessions set: the clinic is open all day (old behaviour)
   if (sessions.length === 0) {
-    return { mode: 'always', bookingOpen: true, active: null, next: null, message: '', shortMessage: '', key: 'always' };
+    return {
+      mode: 'always', bookingOpen: true, active: null, next: null,
+      message: '', shortMessage: '', reason: null, key: 'always',
+    };
   }
 
   const instances = buildInstances(sessions, nowMs);
@@ -158,14 +167,45 @@ function getStatus(sessionRows, nowMs = Date.now()) {
 
   let message = '';
   let shortMessage = '';
+  let reason = null;
+
   if (bookingOpen) {
     shortMessage = `Booking open until ${untilText(active.closeMs, nowMs)}`;
   } else {
-    const opensLine = next ? `${next.name} booking opens ${whenText(next.openMs, nowMs)}.` : '';
-    message = active
-      ? `${active.name} booking has closed.${opensLine ? ` ${opensLine}` : ''}`
-      : (opensLine || 'Online booking is not available right now.');
-    shortMessage = next ? `Booking opens ${whenText(next.openMs, nowMs)}` : 'Booking closed';
+    // Why is booking closed? Work out the reasons that apply right now.
+    const todayKey = istDateKey(nowMs);
+    const weekday = keyWeekday(todayKey);
+    const dayName = WEEKDAY_NAMES[weekday];
+
+    const closedToday = sessions.filter(s => s.closedDays.includes(weekday));
+    const allClosedToday = closedToday.length === sessions.length;
+
+    // A session that was taking bookings earlier today (or just after midnight) has now stopped
+    const justClosed = !!active && active.closeMs >= keyMidnightMs(todayKey);
+
+    const parts = [];
+    if (justClosed) parts.push(`${active.name} booking has closed.`);
+
+    if (allClosedToday) {
+      parts.push(`The clinic is closed today (${dayName}).`);
+    } else if (closedToday.length > 0) {
+      const names = joinNames(closedToday.map(s => s.name));
+      parts.push(`${names} ${closedToday.length > 1 ? 'are' : 'is'} closed today (${dayName}).`);
+    }
+
+    if (next) parts.push(`${next.name} booking opens ${whenText(next.openMs, nowMs)}.`);
+
+    message = parts.length > 0 ? parts.join(' ') : 'Online booking is not available right now.';
+
+    if (allClosedToday) {
+      shortMessage = next ? `Closed today · booking opens ${whenText(next.openMs, nowMs)}` : 'Closed today';
+    } else {
+      shortMessage = next ? `Booking opens ${whenText(next.openMs, nowMs)}` : 'Booking closed';
+    }
+
+    if (allClosedToday || closedToday.length > 0) reason = 'closed_day';
+    if (justClosed && !allClosedToday) reason = 'booking_closed';
+    if (!reason) reason = next ? 'not_open_yet' : 'unavailable';
   }
 
   return {
@@ -175,6 +215,7 @@ function getStatus(sessionRows, nowMs = Date.now()) {
     next,
     message,
     shortMessage,
+    reason,
     key: active ? `${active.sessionId}:${active.dateKey}` : 'none',
   };
 }
@@ -189,6 +230,7 @@ function publicStatus(status) {
     sessionLabel: a ? `${a.name} · ${timeLabel(a.startMs)} – ${timeLabel(a.endMs)}` : null,
     message: status.message,
     shortMessage: status.shortMessage,
+    reason: status.reason,
   };
 }
 
