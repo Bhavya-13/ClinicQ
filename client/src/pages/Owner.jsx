@@ -39,6 +39,87 @@ function formatHour(h) {
   return `${hour}:00 ${suffix}`;
 }
 
+// ── Sessions helpers ───────────────────────────────────────────────
+const DAY_MIN = 24 * 60;
+const WEEK_DAYS = [
+  { n: 1, label: 'Mon' }, { n: 2, label: 'Tue' }, { n: 3, label: 'Wed' }, { n: 4, label: 'Thu' },
+  { n: 5, label: 'Fri' }, { n: 6, label: 'Sat' }, { n: 0, label: 'Sun' },
+];
+const OPEN_BEFORE_OPTIONS = [0, 15, 30, 45, 60, 90, 120, 150, 180, 240, 360];
+const CLOSE_BEFORE_OPTIONS = [0, 15, 30, 45, 60, 90, 120];
+
+const DEFAULT_NEW_SESSIONS = [
+  { name: 'Morning', startTime: '09:00', endTime: '13:00' },
+  { name: 'Evening', startTime: '17:00', endTime: '21:00' },
+];
+
+function newSession(existing) {
+  const used = existing.map(s => s.name);
+  const base = DEFAULT_NEW_SESSIONS.find(d => !used.includes(d.name)) || DEFAULT_NEW_SESSIONS[1];
+  return { ...base, opensBeforeMin: 120, closesBeforeMin: 30, closedDays: [] };
+}
+
+function minutesLabel(m) {
+  if (m < 60) return `${m} min`;
+  if (m % 60 === 0) return `${m / 60} hour${m > 60 ? 's' : ''}`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+function optionsWith(list, value) {
+  return list.includes(value) ? list : [...list, value].sort((a, b) => a - b);
+}
+
+function toMinutes(time) {
+  const [h, m] = String(time || '').split(':').map(Number);
+  return Number.isInteger(h) && Number.isInteger(m) ? h * 60 + m : null;
+}
+
+function formatMinutes(min) {
+  const m = ((min % DAY_MIN) + DAY_MIN) % DAY_MIN;
+  const h = Math.floor(m / 60);
+  const hour = h % 12 === 0 ? 12 : h % 12;
+  return `${hour}:${String(m % 60).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+function formatTime(time) {
+  const m = toMinutes(time);
+  return m === null ? '' : formatMinutes(m);
+}
+
+function sessionsFromClinic(clinic) {
+  return (clinic.sessions || [])
+    .slice()
+    .sort((a, b) => a.slot - b.slot)
+    .map(s => ({
+      name: s.name,
+      startTime: String(s.start_time).slice(0, 5),
+      endTime: String(s.end_time).slice(0, 5),
+      opensBeforeMin: s.booking_opens_before_min,
+      closesBeforeMin: s.booking_closes_before_end_min,
+      closedDays: (s.closed_days || []).map(Number),
+    }));
+}
+
+function sessionsPayload(list) {
+  return list.map(s => ({
+    name: s.name.trim(),
+    startTime: s.startTime,
+    endTime: s.endTime,
+    opensBeforeMin: Number(s.opensBeforeMin),
+    closesBeforeMin: Number(s.closesBeforeMin),
+    closedDays: [...s.closedDays].map(Number).sort((a, b) => a - b),
+  }));
+}
+
+function sessionSummary(clinic) {
+  if (!clinic.sessions || clinic.sessions.length === 0) {
+    return `open all day · resets at ${formatHour(clinic.day_reset_hour)}`;
+  }
+  return clinic.sessions
+    .map(s => `${s.name} ${formatTime(s.start_time)}–${formatTime(s.end_time)}`)
+    .join(' · ');
+}
+
 const S = {
   page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px', boxSizing: 'border-box' },
   card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box', marginBottom: '20px' },
@@ -79,6 +160,115 @@ function ListingFields({ values, onChange }) {
   );
 }
 
+// Up to 2 sessions: when the clinic sees patients and when booking is open
+function SessionsEditor({ sessions, onChange }) {
+  const update = (i, patch) => onChange(sessions.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const remove = (i) => onChange(sessions.filter((_, idx) => idx !== i));
+  const add = () => onChange([...sessions, newSession(sessions)]);
+  const toggleDay = (i, day) => {
+    const current = sessions[i].closedDays;
+    update(i, { closedDays: current.includes(day) ? current.filter(d => d !== day) : [...current, day] });
+  };
+
+  return (
+    <>
+      <p style={S.sectionTitle}>Sessions (when the clinic sees patients)</p>
+
+      {sessions.length === 0 && (
+        <p style={{ ...S.hint, margin: '0 0 12px' }}>
+          No sessions set: the clinic stays open all day, with no booking times.
+        </p>
+      )}
+
+      {sessions.map((s, i) => {
+        const startMin = toMinutes(s.startTime);
+        const endMin = toMinutes(s.endTime);
+        const valid = startMin !== null && endMin !== null && startMin !== endMin;
+        return (
+          <div key={i} style={{ background: '#f7f9fc', border: '1px solid #eef1f5', borderRadius: '14px', padding: '16px', marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <span style={{ fontSize: '13px', fontWeight: '800', color: '#1e3a5f' }}>Session {i + 1}</span>
+              <button type="button" style={{ ...S.secondary, color: '#cc0000', borderColor: '#ffd5d5', padding: '4px 10px', fontSize: '12px' }} onClick={() => remove(i)}>
+                Remove
+              </button>
+            </div>
+
+            <div style={S.grid}>
+              <div>
+                <label style={S.label}>Name</label>
+                <input style={S.input} value={s.name} maxLength={30} onChange={e => update(i, { name: e.target.value })} placeholder="e.g. Morning" />
+              </div>
+              <div>
+                <label style={S.label}>Starts</label>
+                <input style={S.input} type="time" value={s.startTime} onChange={e => update(i, { startTime: e.target.value })} />
+              </div>
+              <div>
+                <label style={S.label}>Ends</label>
+                <input style={S.input} type="time" value={s.endTime} onChange={e => update(i, { endTime: e.target.value })} />
+                <p style={S.hint}>An end time earlier than the start means it runs past midnight.</p>
+              </div>
+              <div>
+                <label style={S.label}>Booking opens</label>
+                <select style={S.input} value={s.opensBeforeMin} onChange={e => update(i, { opensBeforeMin: Number(e.target.value) })}>
+                  {optionsWith(OPEN_BEFORE_OPTIONS, s.opensBeforeMin).map(m => (
+                    <option key={m} value={m}>{m === 0 ? 'At the start time' : `${minutesLabel(m)} before start`}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={S.label}>Booking closes</label>
+                <select style={S.input} value={s.closesBeforeMin} onChange={e => update(i, { closesBeforeMin: Number(e.target.value) })}>
+                  {optionsWith(CLOSE_BEFORE_OPTIONS, s.closesBeforeMin).map(m => (
+                    <option key={m} value={m}>{m === 0 ? 'At the end time' : `${minutesLabel(m)} before end`}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <label style={S.label}>Closed on</label>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              {WEEK_DAYS.map(({ n, label }) => {
+                const closed = s.closedDays.includes(n);
+                return (
+                  <button
+                    type="button"
+                    key={n}
+                    onClick={() => toggleDay(i, n)}
+                    style={{
+                      padding: '8px 12px', borderRadius: '10px', fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+                      border: closed ? '2px solid #f5b5b5' : '2px solid #dbeafe',
+                      background: closed ? '#fff0f0' : 'white',
+                      color: closed ? '#cc0000' : '#2d6a9f',
+                    }}
+                  >
+                    {label}{closed ? ' ✕' : ''}
+                  </button>
+                );
+              })}
+            </div>
+            <p style={S.hint}>Tap a day to mark this session closed on that day.</p>
+
+            {valid && (
+              <p style={{ fontSize: '12.5px', color: '#2d6a9f', fontWeight: '600', margin: '12px 0 0' }}>
+                Booking opens {formatMinutes(startMin - s.opensBeforeMin)} · closes {formatMinutes(endMin - s.closesBeforeMin)} · session ends {formatMinutes(endMin)}{endMin < startMin ? ' (next day)' : ''}
+              </p>
+            )}
+          </div>
+        );
+      })}
+
+      {sessions.length < 2 && (
+        <button type="button" style={{ ...S.secondary, marginBottom: '8px' }} onClick={add}>
+          + Add {sessions.length === 0 ? 'a session' : 'a second session'}
+        </button>
+      )}
+      <p style={{ ...S.hint, marginBottom: '16px' }}>
+        Token numbers start again from 1 when each session's booking opens. A session's queue stays open until the next session's booking opens.
+      </p>
+    </>
+  );
+}
+
 function CreateClinicForm({ ownerFetch, onCreated }) {
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
@@ -86,6 +276,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
   const [pin, setPin] = useState('');
   const [pinConfirm, setPinConfirm] = useState('');
   const [hour, setHour] = useState(16);
+  const [sessions, setSessions] = useState([]);
   const [listing, setListing] = useState(EMPTY_LISTING);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -108,7 +299,10 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
     try {
       const res = await ownerFetch('/clinics', {
         method: 'POST',
-        body: JSON.stringify({ name: name.trim(), slug, pin, dayResetHour: Number(hour), ...listing }),
+        body: JSON.stringify({
+          name: name.trim(), slug, pin, dayResetHour: Number(hour),
+          sessions: sessionsPayload(sessions), ...listing,
+        }),
       });
       if (!res) return;
       const data = await res.json();
@@ -117,6 +311,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
       onCreated(data.clinic);
       setName(''); setSlug(''); setSlugTouched(false);
       setPin(''); setPinConfirm(''); setHour(16);
+      setSessions([]);
       setListing(EMPTY_LISTING);
     } catch {
       setError('Could not reach the server.');
@@ -154,14 +349,18 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
           <label style={S.label}>Confirm PIN</label>
           <input style={S.input} type="password" inputMode="numeric" value={pinConfirm} onChange={e => setPinConfirm(e.target.value)} />
         </div>
-        <div>
-          <label style={S.label}>Token numbers reset at</label>
-          <select style={S.input} value={hour} onChange={e => setHour(Number(e.target.value))}>
-            {HOURS.map(h => <option key={h} value={h}>{formatHour(h)} (IST)</option>)}
-          </select>
-          <p style={S.hint}>Pick a time when the clinic is closed.</p>
-        </div>
+        {sessions.length === 0 && (
+          <div>
+            <label style={S.label}>Token numbers reset at</label>
+            <select style={S.input} value={hour} onChange={e => setHour(Number(e.target.value))}>
+              {HOURS.map(h => <option key={h} value={h}>{formatHour(h)} (IST)</option>)}
+            </select>
+            <p style={S.hint}>Only used when no sessions are set below.</p>
+          </div>
+        )}
       </div>
+
+      <SessionsEditor sessions={sessions} onChange={setSessions} />
 
       <ListingFields values={listing} onChange={setListing} />
 
@@ -180,6 +379,7 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
   const [hour, setHour] = useState(clinic.day_reset_hour);
   const [newPin, setNewPin] = useState('');
   const [isActive, setIsActive] = useState(clinic.is_active);
+  const [sessions, setSessions] = useState(() => sessionsFromClinic(clinic));
   const [listing, setListing] = useState(() => listingFromClinic(clinic));
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -194,12 +394,14 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
 
   const doctorLine = [clinic.doctor_name, clinic.specialty].filter(Boolean).join(' · ');
   const placeLine = [clinic.area, clinic.city].filter(Boolean).join(', ');
+  const hasSessions = clinic.sessions && clinic.sessions.length > 0;
 
   const startEditing = () => {
     setName(clinic.name);
     setHour(clinic.day_reset_hour);
     setNewPin('');
     setIsActive(clinic.is_active);
+    setSessions(sessionsFromClinic(clinic));
     setListing(listingFromClinic(clinic));
     setError('');
     setEditing(true);
@@ -223,6 +425,12 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
     if (newPin) {
       if (!PIN_PATTERN.test(newPin)) return setError('New PIN must be 6–12 digits.');
       updates.pin = newPin;
+    }
+
+    // Only send sessions if they actually changed
+    const newSessions = sessionsPayload(sessions);
+    if (JSON.stringify(newSessions) !== JSON.stringify(sessionsPayload(sessionsFromClinic(clinic)))) {
+      updates.sessions = newSessions;
     }
 
     // Only send listing fields that actually changed
@@ -269,9 +477,14 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
           {doctorLine && <p style={{ fontSize: '13.5px', color: '#2d6a9f', fontWeight: '600', margin: '0 0 2px' }}>{doctorLine}</p>}
           {placeLine && <p style={{ fontSize: '13px', color: '#6b7684', margin: '0 0 2px' }}>📍 {placeLine}</p>}
           <p style={{ fontSize: '13px', color: '#8a94a3', margin: 0 }}>
-            /c/{clinic.slug} · resets at {formatHour(clinic.day_reset_hour)}
+            /c/{clinic.slug} · {sessionSummary(clinic)}
             {clinic.is_paused && ' · registrations paused'}
           </p>
+          {hasSessions && clinic.schedule && (
+            <p style={{ fontSize: '13px', color: '#2d6a9f', fontWeight: '600', margin: '4px 0 0' }}>
+              Right now: {clinic.schedule.sessionName ? `${clinic.schedule.sessionName} — ` : ''}{clinic.schedule.shortMessage}
+            </p>
+          )}
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           {clinic.is_active ? badge('Active', '#e8f8f5', '#00a37a') : badge('Turned off', '#f0f0f0', '#888')}
@@ -300,18 +513,23 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
               <label style={S.label}>Clinic name</label>
               <input style={S.input} value={name} maxLength={80} onChange={e => setName(e.target.value)} />
             </div>
-            <div>
-              <label style={S.label}>Token numbers reset at</label>
-              <select style={S.input} value={hour} onChange={e => setHour(Number(e.target.value))}>
-                {HOURS.map(h => <option key={h} value={h}>{formatHour(h)} (IST)</option>)}
-              </select>
-            </div>
+            {sessions.length === 0 && (
+              <div>
+                <label style={S.label}>Token numbers reset at</label>
+                <select style={S.input} value={hour} onChange={e => setHour(Number(e.target.value))}>
+                  {HOURS.map(h => <option key={h} value={h}>{formatHour(h)} (IST)</option>)}
+                </select>
+                <p style={S.hint}>Only used when no sessions are set below.</p>
+              </div>
+            )}
             <div>
               <label style={S.label}>New staff PIN (optional)</label>
               <input style={S.input} type="password" inputMode="numeric" value={newPin} onChange={e => setNewPin(e.target.value)} placeholder="Leave blank to keep" />
               <p style={S.hint}>Changing it logs out this clinic's staff.</p>
             </div>
           </div>
+
+          <SessionsEditor sessions={sessions} onChange={setSessions} />
 
           <ListingFields values={listing} onChange={setListing} />
 

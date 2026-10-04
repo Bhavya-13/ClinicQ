@@ -8,6 +8,7 @@ const cors = require('cors');
 const QRCode = require('qrcode');
 const db = require('./db');
 const auth = require('./auth');
+const schedule = require('./schedule');
 
 process.on('unhandledRejection', (reason) => {
   console.error('❌ Unhandled Rejection:', reason);
@@ -68,6 +69,12 @@ async function broadcast(clinic) {
   room.emit('avg-updated', avg);
 }
 
+// Adds "what is the clinic doing right now" to a clinic object for the owner page
+function withSchedule(clinic) {
+  if (!clinic) return clinic;
+  return { ...clinic, schedule: schedule.publicStatus(schedule.getStatus(clinic.sessions)) };
+}
+
 // ── Clinic listing details (shown on the public homepage) ──
 const LISTING_FIELDS = {
   doctorName: { column: 'doctor_name', label: 'Doctor name', max: 80 },
@@ -125,7 +132,8 @@ ownerRouter.post('/login', (req, res) => {
 
 ownerRouter.get('/clinics', requireOwner, async (req, res) => {
   try {
-    res.json({ clinics: await db.listClinics() });
+    const clinics = await db.listClinics();
+    res.json({ clinics: clinics.map(withSchedule) });
   } catch (err) {
     console.error('❌ GET /api/owner/clinics error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -152,14 +160,24 @@ ownerRouter.post('/clinics', requireOwner, async (req, res) => {
     const listing = readListingFields(body);
     if (listing.error) return res.status(400).json({ error: listing.error });
 
-    const clinic = await db.createClinic({
+    let sessionRows = [];
+    if (body.sessions !== undefined) {
+      const result = schedule.normalizeSessions(body.sessions);
+      if (result.error) return res.status(400).json({ error: result.error });
+      sessionRows = result.sessions;
+    }
+
+    const created = await db.createClinic({
       slug,
       name,
       pinHash: auth.hashPin(pin),
       dayResetHour,
       listing: listing.fields,
     });
-    res.status(201).json({ clinic });
+    if (sessionRows.length > 0) await db.setSessions(created.id, sessionRows);
+
+    const clinic = await db.getClinicForOwner(created.id);
+    res.status(201).json({ clinic: withSchedule(clinic) });
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'That link name is already taken' });
     console.error('❌ POST /api/owner/clinics error:', err);
@@ -169,6 +187,7 @@ ownerRouter.post('/clinics', requireOwner, async (req, res) => {
 
 ownerRouter.patch('/clinics/:id', requireOwner, async (req, res) => {
   try {
+    const id = Number(req.params.id);
     const updates = {};
     const body = req.body || {};
 
@@ -197,25 +216,44 @@ ownerRouter.patch('/clinics/:id', requireOwner, async (req, res) => {
     if (listing.error) return res.status(400).json({ error: listing.error });
     Object.assign(updates, listing.fields);
 
-    if (Object.keys(updates).length === 0) {
+    let sessionRows = null;
+    if (body.sessions !== undefined) {
+      const result = schedule.normalizeSessions(body.sessions);
+      if (result.error) return res.status(400).json({ error: result.error });
+      sessionRows = result.sessions;
+    }
+
+    if (Object.keys(updates).length === 0 && sessionRows === null) {
       return res.status(400).json({ error: 'Nothing to update' });
     }
 
-    const clinic = await db.updateClinic(Number(req.params.id), updates);
-    if (!clinic) return res.status(404).json({ error: 'Clinic not found' });
+    const existing = await db.getClinicForOwner(id);
+    if (!existing) return res.status(404).json({ error: 'Clinic not found' });
 
-    // Let that clinic's open pages refresh their info (name, on/off)
+    if (Object.keys(updates).length > 0) await db.updateClinic(id, updates);
+    if (sessionRows !== null) await db.setSessions(id, sessionRows);
+
+    const clinic = await db.getClinicForOwner(id);
+
+    // Let that clinic's open pages refresh their info (name, on/off, sessions)
     const visibleChange =
-      updates.name !== undefined || updates.is_active !== undefined || updates.day_reset_hour !== undefined;
+      updates.name !== undefined ||
+      updates.is_active !== undefined ||
+      updates.day_reset_hour !== undefined ||
+      sessionRows !== null;
     if (visibleChange) {
-      io.to(roomFor(clinic.id)).emit('clinic-updated');
+      io.to(roomFor(id)).emit('clinic-updated');
+      if (sessionRows !== null) {
+        const full = await db.getClinicById(id);
+        if (full) await broadcast(full);
+      }
     }
     // Turned off: also cut its live connections
     if (updates.is_active === false) {
-      io.in(roomFor(clinic.id)).disconnectSockets(true);
+      io.in(roomFor(id)).disconnectSockets(true);
     }
 
-    res.json({ clinic });
+    res.json({ clinic: withSchedule(clinic) });
   } catch (err) {
     console.error('❌ PATCH /api/owner/clinics/:id error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -227,7 +265,13 @@ app.use('/api/owner', ownerRouter);
 // ── Public clinic search (homepage) — only active clinics that chose to be listed ──
 app.get('/api/public/clinics', async (req, res) => {
   try {
-    res.json({ clinics: await db.listListedClinics() });
+    const clinics = await db.listListedClinics();
+    res.json({
+      clinics: clinics.map(({ sessions, ...rest }) => ({
+        ...rest,
+        schedule: schedule.publicStatus(schedule.getStatus(sessions)),
+      })),
+    });
   } catch (err) {
     console.error('❌ GET /api/public/clinics error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -253,6 +297,7 @@ clinicRouter.use(async (req, res, next) => {
       });
     }
     req.clinic = clinic;
+    req.schedule = schedule.getStatus(clinic.sessions); // is booking open right now?
     req.isLegacyRoute = !req.params.slug;
     next();
   } catch (err) {
@@ -268,13 +313,19 @@ function requireClinicAdmin(req, res, next) {
   next();
 }
 
-// Public clinic info (name for page headers)
+// Public clinic info (name, pause state and booking state for page headers)
 clinicRouter.get('/info', (req, res) => {
   const c = req.clinic;
-  res.json({ slug: c.slug, name: c.name, isPaused: c.is_paused, dayResetHour: c.day_reset_hour });
+  res.json({
+    slug: c.slug,
+    name: c.name,
+    isPaused: c.is_paused,
+    dayResetHour: c.day_reset_hour,
+    schedule: schedule.publicStatus(req.schedule),
+  });
 });
 
-// ── Staff login ─────────────────────────────────────────────
+// ── Staff login ─────────────────────────────────────────────────────
 clinicRouter.post('/admin/login', (req, res) => {
   const key = `${req.ip}:${req.clinic.id}`;
   const minsLocked = clinicLoginLimiter.minutesLocked(key);
@@ -296,7 +347,7 @@ clinicRouter.get('/admin/verify', requireClinicAdmin, (req, res) => {
   res.json({ valid: true });
 });
 
-// ── QR code ─────────────────────────────────────────────────
+// ── QR code ─────────────────────────────────────────────────────────
 clinicRouter.get('/qrcode', async (req, res) => {
   try {
     const frontendUrl = FRONTEND_ORIGIN;
@@ -311,11 +362,17 @@ clinicRouter.get('/qrcode', async (req, res) => {
   }
 });
 
-// ── Register ────────────────────────────────────────────────
+// ── Register ────────────────────────────────────────────────────────
 clinicRouter.post('/register', async (req, res) => {
   try {
     if (req.clinic.is_paused) {
       return res.status(403).json({ error: 'Registration is currently paused. Please check back shortly.' });
+    }
+    if (!req.schedule.bookingOpen) {
+      return res.status(403).json({
+        error: req.schedule.message || 'Booking is closed right now.',
+        bookingClosed: true,
+      });
     }
 
     const { names, numPatients } = req.body || {};
@@ -351,12 +408,15 @@ clinicRouter.post('/register', async (req, res) => {
     await broadcast(req.clinic);
     res.json({ success: true, patient, existing: false, rejoined: false });
   } catch (err) {
+    if (err.code === 'NO_ACTIVE_SESSION') {
+      return res.status(403).json({ error: req.schedule.message || 'Booking is closed right now.', bookingClosed: true });
+    }
     console.error('❌ register error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// ── Queue (public) ──────────────────────────────────────────
+// ── Queue (public) ──────────────────────────────────────────────────
 clinicRouter.get('/queue/full', async (req, res) => {
   try {
     const [queue, skipped, avgMinsPerPerson] = await Promise.all([
@@ -375,12 +435,21 @@ clinicRouter.get('/queue/paused', (req, res) => {
   res.json({ paused: req.clinic.is_paused });
 });
 
-// ── Patient (by private link) ───────────────────────────────
+// ── Patient (by private link) ───────────────────────────────────────
 clinicRouter.get('/patient/:accessToken', async (req, res) => {
   try {
     const patient = await db.getPatientByAccessToken(req.clinic.id, req.params.accessToken);
     if (!patient) return res.status(404).json({ error: 'Not found' });
-    res.json(patient);
+
+    // Still waiting (or skipped) in a queue that is no longer the live one?
+    // Then their session has ended and the token no longer counts.
+    let queueEnded = false;
+    if (['waiting', 'called', 'skipped'].includes(patient.status)) {
+      const queue = await db.getTodayQueue(req.clinic);
+      queueEnded = !queue || queue.id !== patient.queue_id;
+    }
+
+    res.json({ ...patient, queueEnded });
   } catch (err) {
     console.error('❌ patient error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -415,11 +484,16 @@ clinicRouter.post('/cancel/:accessToken', async (req, res) => {
   }
 });
 
+// Skipped patient rejoins (end of queue), or a leftover patient joins the new session's queue
 clinicRouter.post('/rejoin/:accessToken', async (req, res) => {
   try {
     if (req.clinic.is_paused) {
       return res.status(403).json({ error: 'Registration is currently paused. Please check back shortly.' });
     }
+    if (!req.schedule.bookingOpen) {
+      return res.status(403).json({ error: req.schedule.message || 'Booking is closed right now.', bookingClosed: true });
+    }
+
     const patient = await db.rejoinQueue(req.clinic, req.params.accessToken);
     if (!patient) {
       return res.status(400).json({
@@ -434,7 +508,7 @@ clinicRouter.post('/rejoin/:accessToken', async (req, res) => {
   }
 });
 
-// ── Staff actions ───────────────────────────────────────────
+// ── Staff actions ───────────────────────────────────────────────────
 clinicRouter.post('/admin/action', requireClinicAdmin, async (req, res) => {
   try {
     const clinic = req.clinic;
@@ -514,29 +588,8 @@ clinicRouter.post('/admin/checkin', requireClinicAdmin, async (req, res) => {
   }
 });
 
-// Staff bring a skipped patient back as next in line (they are at the counter)
-clinicRouter.post('/admin/recall/:id', requireClinicAdmin, async (req, res) => {
-  try {
-    const patientId = parseInt(req.params.id);
-    if (!Number.isInteger(patientId)) {
-      return res.status(400).json({ success: false, message: 'Invalid patient' });
-    }
-
-    const patient = await db.recallSkippedPatient(req.clinic, patientId);
-    if (!patient) {
-      return res.json({ success: false, message: 'That patient is no longer in the skipped list' });
-    }
-
-    io.to(roomFor(req.clinic.id)).emit('patient-recalled', patient);
-    await broadcast(req.clinic);
-    res.json({ success: true, patient });
-  } catch (err) {
-    console.error('❌ admin/recall error:', err);
-    res.status(500).json({ error: 'Server error' });
-  }
-});
-
-// Staff add a patient who has no phone. Works even while online registration is paused.
+// Staff add a patient who has no phone. Works while paused and after booking closes,
+// as long as a session is running. The patient goes to the end of the queue.
 clinicRouter.post('/admin/walkin', requireClinicAdmin, async (req, res) => {
   try {
     const rawName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
@@ -556,6 +609,12 @@ clinicRouter.post('/admin/walkin', requireClinicAdmin, async (req, res) => {
       patient: { token_number: patient.token_number, names: patient.names, num_patients: patient.num_patients },
     });
   } catch (err) {
+    if (err.code === 'NO_ACTIVE_SESSION') {
+      return res.status(409).json({
+        success: false,
+        message: `No session is running, so a walk-in can't be added. ${req.schedule.message}`.trim(),
+      });
+    }
     console.error('❌ admin/walkin error:', err);
     res.status(500).json({ error: 'Server error' });
   }
@@ -614,6 +673,42 @@ setInterval(async () => {
     sweeping = false;
   }
 }, SWEEP_INTERVAL_MS);
+
+// ── Session watcher — tells open pages when a session starts, or booking opens/closes ──
+const SCHEDULE_CHECK_MS = 15000;
+const lastScheduleKey = new Map(); // clinic id → what it looked like last check
+let checkingSchedules = false;
+
+setInterval(async () => {
+  if (checkingSchedules) return;
+  checkingSchedules = true;
+  try {
+    const clinics = await db.listActiveClinics();
+    const seen = new Set();
+
+    for (const clinic of clinics) {
+      seen.add(clinic.id);
+      const status = schedule.getStatus(clinic.sessions);
+      const key = `${status.key}|${status.bookingOpen ? 'open' : 'closed'}`;
+      const previous = lastScheduleKey.get(clinic.id);
+      lastScheduleKey.set(clinic.id, key);
+
+      // First time we see a clinic we only remember it; later changes are announced
+      if (previous !== undefined && previous !== key) {
+        io.to(roomFor(clinic.id)).emit('clinic-updated');
+        await broadcast(clinic);
+      }
+    }
+
+    for (const id of lastScheduleKey.keys()) {
+      if (!seen.has(id)) lastScheduleKey.delete(id);
+    }
+  } catch (err) {
+    console.error('❌ Schedule check error:', err);
+  } finally {
+    checkingSchedules = false;
+  }
+}, SCHEDULE_CHECK_MS);
 
 // ── Sockets — each connection joins its clinic's room ──────
 io.on('connection', async (socket) => {

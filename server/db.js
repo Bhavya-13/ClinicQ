@@ -2,6 +2,7 @@ const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { createClient } = require('@supabase/supabase-js');
 const crypto = require('crypto');
+const schedule = require('./schedule');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -17,7 +18,10 @@ const CLINIC_UTC_OFFSET_MINUTES = 330;
 // Everything that may be shown publicly about a patient.
 // access_token is deliberately NOT included — it's the patient's private key.
 const PUBLIC_PATIENT_FIELDS =
-  'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at, queue_order';
+  'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at';
+
+const SESSION_FIELDS =
+  'id, slot, name, start_time, end_time, booking_opens_before_min, booking_closes_before_end_min, closed_days';
 
 const CLINIC_ADMIN_FIELDS =
   'id, slug, name, doctor_name, specialty, area, city, address, timings, is_listed, day_reset_hour, is_active, is_paused, created_at';
@@ -26,71 +30,95 @@ const CLINIC_ADMIN_FIELDS =
 const CLINIC_LISTING_FIELDS =
   'slug, name, doctor_name, specialty, area, city, address, timings, is_paused';
 
+// A clinic together with its sessions, in one request
+const WITH_SESSIONS = `*, sessions:clinic_sessions(${SESSION_FIELDS})`;
+const ADMIN_WITH_SESSIONS = `${CLINIC_ADMIN_FIELDS}, sessions:clinic_sessions(${SESSION_FIELDS})`;
+const LISTING_WITH_SESSIONS = `${CLINIC_LISTING_FIELDS}, sessions:clinic_sessions(${SESSION_FIELDS})`;
+
 function newAccessToken() {
   return crypto.randomBytes(16).toString('hex');
 }
 
-// ── Queue order ───────────────────────────────────────────
-// Normally the order is the token number. A recalled patient gets a negative
-// queue_order (earlier recalls = smaller number), so they come before everyone
-// else who is waiting, while keeping their original token number.
-const RECALL_ORDER_BASE = 4000000000;
-
-function queuePosition(p) {
-  return p.queue_order !== null && p.queue_order !== undefined ? Number(p.queue_order) : p.token_number;
+// Sessions come back in any order — keep them in slot order
+function tidy(clinic) {
+  if (clinic && Array.isArray(clinic.sessions)) {
+    clinic.sessions.sort((a, b) => a.slot - b.slot);
+  }
+  return clinic;
 }
 
-// The patient being served is always first; everyone else follows queue order
+// The patient being served is always first; everyone else by token number
 function sortForQueue(list) {
   return [...list].sort((a, b) => {
     const calledA = a.status === 'called' ? 0 : 1;
     const calledB = b.status === 'called' ? 0 : 1;
-    return calledA - calledB || queuePosition(a) - queuePosition(b) || a.token_number - b.token_number;
+    return calledA - calledB || a.token_number - b.token_number;
   });
 }
 
-// ── Clinics ───────────────────────────────────────────────
+// ── Clinics ────────────────────────────────────────────────────────
 
 async function getClinicBySlug(slug) {
   const { data, error } = await supabase
     .from('clinics')
-    .select('*')
+    .select(WITH_SESSIONS)
     .eq('slug', slug)
     .maybeSingle();
   if (error) throw error;
-  return data;
+  return tidy(data);
 }
 
 async function getClinicById(id) {
   const { data, error } = await supabase
     .from('clinics')
-    .select('*')
+    .select(WITH_SESSIONS)
     .eq('id', id)
     .maybeSingle();
   if (error) throw error;
-  return data;
+  return tidy(data);
+}
+
+// Owner view of one clinic (no PIN hash)
+async function getClinicForOwner(id) {
+  const { data, error } = await supabase
+    .from('clinics')
+    .select(ADMIN_WITH_SESSIONS)
+    .eq('id', id)
+    .maybeSingle();
+  if (error) throw error;
+  return tidy(data);
 }
 
 async function listClinics() {
   const { data, error } = await supabase
     .from('clinics')
-    .select(CLINIC_ADMIN_FIELDS)
+    .select(ADMIN_WITH_SESSIONS)
     .order('created_at', { ascending: true });
   if (error) throw error;
-  return data;
+  return data.map(tidy);
 }
 
 // Active clinics that chose to appear in public search
 async function listListedClinics() {
   const { data, error } = await supabase
     .from('clinics')
-    .select(CLINIC_LISTING_FIELDS)
+    .select(LISTING_WITH_SESSIONS)
     .eq('is_active', true)
     .eq('is_listed', true)
     .order('name', { ascending: true })
     .limit(500);
   if (error) throw error;
-  return data;
+  return data.map(tidy);
+}
+
+// Used by the background schedule check
+async function listActiveClinics() {
+  const { data, error } = await supabase
+    .from('clinics')
+    .select(WITH_SESSIONS)
+    .eq('is_active', true);
+  if (error) throw error;
+  return data.map(tidy);
 }
 
 async function createClinic({ slug, name, pinHash, dayResetHour, listing = {} }) {
@@ -114,6 +142,23 @@ async function updateClinic(id, updates) {
   return data;
 }
 
+// Replaces a clinic's sessions with exactly this list (0, 1 or 2 rows, already validated)
+async function setSessions(clinicId, rows) {
+  if (rows.length > 0) {
+    const { error } = await supabase
+      .from('clinic_sessions')
+      .upsert(rows.map(r => ({ ...r, clinic_id: clinicId })), { onConflict: 'clinic_id,slot' });
+    if (error) throw error;
+  }
+
+  let del = supabase.from('clinic_sessions').delete().eq('clinic_id', clinicId);
+  if (rows.length > 0) {
+    del = del.not('slot', 'in', `(${rows.map(r => r.slot).join(',')})`);
+  }
+  const { error: deleteError } = await del;
+  if (deleteError) throw deleteError;
+}
+
 async function setQueuePausedStatus(clinicId, isPaused) {
   const { error } = await supabase
     .from('clinics')
@@ -122,8 +167,9 @@ async function setQueuePausedStatus(clinicId, isPaused) {
   if (error) throw error;
 }
 
-// ── Clinic day + daily queue ──────────────────────────────
+// ── Queues ─────────────────────────────────────────────────────────
 
+// Old "day with a reset hour" key — only used by clinics with no sessions
 function getClinicDateKey(dayResetHour) {
   const nowInClinicTime = new Date(Date.now() + CLINIC_UTC_OFFSET_MINUTES * 60 * 1000);
   if (nowInClinicTime.getUTCHours() < dayResetHour) {
@@ -132,14 +178,12 @@ function getClinicDateKey(dayResetHour) {
   return nowInClinicTime.toISOString().split('T')[0];
 }
 
-// Deletes this clinic's patients/queues from previous days. Other clinics are untouched.
-async function cleanupOldPatientData(clinicId, todayKey) {
-  const { data: oldQueues, error } = await supabase
-    .from('queues')
-    .select('id')
-    .eq('clinic_id', clinicId)
-    .neq('date', todayKey);
-
+// Deletes this clinic's old queues (and their patients). Other clinics are untouched.
+// applyFilter picks which of this clinic's queues count as "old".
+async function cleanupQueues(clinicId, applyFilter) {
+  const { data: oldQueues, error } = await applyFilter(
+    supabase.from('queues').select('id').eq('clinic_id', clinicId)
+  );
   if (error) throw error;
   if (!oldQueues || oldQueues.length === 0) return;
 
@@ -157,45 +201,73 @@ async function cleanupOldPatientData(clinicId, todayKey) {
     .in('id', oldQueueIds);
   if (deleteQueuesError) throw deleteQueuesError;
 
-  console.log(`🧹 Clinic ${clinicId}: cleaned up ${oldQueueIds.length} previous day(s)`);
+  console.log(`🧹 Clinic ${clinicId}: cleaned up ${oldQueueIds.length} old queue(s)`);
 }
 
-async function getTodayQueue(clinic) {
-  const dateKey = getClinicDateKey(clinic.day_reset_hour);
-
-  const { data: queue, error } = await supabase
+async function findQueue(clinicId, dateKey, sessionId) {
+  let query = supabase
     .from('queues')
     .select('*')
-    .eq('clinic_id', clinic.id)
-    .eq('date', dateKey)
-    .maybeSingle();
+    .eq('clinic_id', clinicId)
+    .eq('date', dateKey);
+  query = sessionId ? query.eq('session_id', sessionId) : query.is('session_id', null);
+
+  const { data, error } = await query.maybeSingle();
   if (error) throw error;
-  if (queue) return queue;
+  return data;
+}
 
-  await cleanupOldPatientData(clinic.id, dateKey);
+async function createQueue(clinic, dateKey, sessionId, cleanupFilter) {
+  await cleanupQueues(clinic.id, cleanupFilter);
 
-  const { data: newQueue, error: insertError } = await supabase
+  const { data, error } = await supabase
     .from('queues')
-    .insert({ clinic_id: clinic.id, date: dateKey, current_number: 0 })
+    .insert({ clinic_id: clinic.id, date: dateKey, session_id: sessionId, current_number: 0 })
     .select()
     .single();
 
-  if (insertError) {
-    // Another request created today's queue a moment earlier — use that one
-    if (insertError.code === '23505') {
-      const { data: existing, error: refetchError } = await supabase
-        .from('queues')
-        .select('*')
-        .eq('clinic_id', clinic.id)
-        .eq('date', dateKey)
-        .single();
-      if (refetchError) throw refetchError;
-      return existing;
+  if (error) {
+    // Another request created this queue a moment earlier — use that one
+    if (error.code === '23505') {
+      const existing = await findQueue(clinic.id, dateKey, sessionId);
+      if (existing) return existing;
     }
-    throw insertError;
+    throw error;
+  }
+  return data;
+}
+
+// Works out which queue is live right now for this clinic.
+//   - Clinics with sessions: the queue of the running session. Its token numbers
+//     start from 1 each time a session's booking opens (a new queue is created).
+//   - Clinics without sessions: one queue per day, reset at day_reset_hour (old way).
+// create=false only looks; it never creates anything.
+async function getQueueContext(clinic, { create = false } = {}) {
+  const status = schedule.getStatus(clinic.sessions);
+
+  if (status.mode === 'always') {
+    const dateKey = getClinicDateKey(clinic.day_reset_hour);
+    let queue = await findQueue(clinic.id, dateKey, null);
+    if (!queue && create) {
+      queue = await createQueue(clinic, dateKey, null, q => q.neq('date', dateKey));
+    }
+    return { queue, status };
   }
 
-  return newQueue;
+  if (!status.active) return { queue: null, status };
+
+  const { dateKey, sessionId } = status.active;
+  let queue = await findQueue(clinic.id, dateKey, sessionId);
+  if (!queue && create) {
+    // Keep yesterday and today so leftover patients can still see their token page
+    const cutoff = schedule.addDaysToKey(schedule.istDateKey(Date.now()), -1);
+    queue = await createQueue(clinic, dateKey, sessionId, q => q.lt('date', cutoff));
+  }
+  return { queue, status };
+}
+
+async function getTodayQueue(clinic, options) {
+  return (await getQueueContext(clinic, options)).queue;
 }
 
 // Atomic in the database, so two simultaneous registrations never get the same number
@@ -205,10 +277,15 @@ async function takeNextTokenNumber(queueId) {
   return data;
 }
 
-// ── Patients ──────────────────────────────────────────────
+// ── Patients ───────────────────────────────────────────────────────
 
 async function registerPatient(clinic, names, numPatients) {
-  const queue = await getTodayQueue(clinic);
+  const queue = await getTodayQueue(clinic, { create: true });
+  if (!queue) {
+    const err = new Error('No session is running');
+    err.code = 'NO_ACTIVE_SESSION';
+    throw err;
+  }
   const tokenNumber = await takeNextTokenNumber(queue.id);
 
   const { data, error } = await supabase
@@ -230,6 +307,8 @@ async function registerPatient(clinic, names, numPatients) {
 
 async function getFullQueueDisplay(clinic) {
   const queue = await getTodayQueue(clinic);
+  if (!queue) return [];
+
   const { data, error } = await supabase
     .from('patients')
     .select(PUBLIC_PATIENT_FIELDS)
@@ -242,6 +321,8 @@ async function getFullQueueDisplay(clinic) {
 
 async function getRecentlySkipped(clinic) {
   const queue = await getTodayQueue(clinic);
+  if (!queue) return [];
+
   const { data, error } = await supabase
     .from('patients')
     .select(PUBLIC_PATIENT_FIELDS)
@@ -278,16 +359,17 @@ async function getAvgMinutesPerPerson(clinicId) {
 
 async function callNext(clinic) {
   const queue = await getTodayQueue(clinic);
+  if (!queue) return null;
+
   const { data: waiting, error } = await supabase
     .from('patients')
-    .select('id, token_number, queue_order')
+    .select('id')
     .eq('queue_id', queue.id)
-    .eq('status', 'waiting');
+    .eq('status', 'waiting')
+    .order('token_number', { ascending: true })
+    .limit(1);
   if (error) throw error;
   if (!waiting || waiting.length === 0) return null;
-
-  // Recalled patients come first, then token order
-  const next = sortForQueue(waiting)[0];
 
   const now = new Date();
   const deadline = new Date(now.getTime() + GRACE_PERIOD_SECONDS * 1000);
@@ -300,7 +382,7 @@ async function callNext(clinic) {
       checkin_deadline: deadline.toISOString(),
       checkin_status: 'pending',
     })
-    .eq('id', next.id)
+    .eq('id', waiting[0].id)
     .eq('status', 'waiting')
     .select(PUBLIC_PATIENT_FIELDS)
     .maybeSingle();
@@ -377,33 +459,6 @@ async function sweepExpiredCheckins() {
   return data || [];
 }
 
-// Staff bring a skipped patient back as next in line. They keep their token number.
-// Returns the patient (public fields), or null if they are no longer in the skipped list.
-async function recallSkippedPatient(clinic, patientId) {
-  const queue = await getTodayQueue(clinic);
-  const { data, error } = await supabase
-    .from('patients')
-    .update({
-      status: 'waiting',
-      checkin_status: 'rejoined',
-      skip_reason: null,
-      skipped_at: null,
-      called_at: null,
-      checkin_deadline: null,
-      // Negative = before every normal token. Earlier recalls get a smaller number,
-      // so if several people are recalled, the first recalled goes first.
-      queue_order: Math.floor(Date.now() / 1000) - RECALL_ORDER_BASE,
-    })
-    .eq('clinic_id', clinic.id)
-    .eq('queue_id', queue.id)
-    .eq('id', patientId)
-    .eq('status', 'skipped')
-    .select(PUBLIC_PATIENT_FIELDS)
-    .maybeSingle();
-  if (error) throw error;
-  return data;
-}
-
 // A patient cancels their own token (waiting, or called but not yet checked in).
 // Everyone behind them moves up. Not counted in the wait-time average.
 async function cancelPatientToken(clinicId, accessToken) {
@@ -426,47 +481,69 @@ async function cancelPatientToken(clinicId, accessToken) {
   return { success: true, patient: data };
 }
 
-// Closes a skipped entry and puts the same person at the end of today's queue.
-// Returns the new patient (with access_token), or null if the entry was already closed.
-async function rejoinSkippedPatient(clinic, oldPatient) {
-  // Claim the old entry first, so two rejoins at once can't create two new tokens
+// Closes an old entry and puts the same people at the END of the live queue
+// with a new token number. Returns the new patient (with access_token), or null.
+async function moveToCurrentQueue(clinic, oldPatient, { asRejoined, fromStatuses }) {
+  const queue = await getTodayQueue(clinic, { create: true });
+  if (!queue) return null;
+
+  // Claim the old entry first, so two requests at once can't create two new tokens
   const { data: claimed, error: claimError } = await supabase
     .from('patients')
     .update({ status: 'done', checkin_status: 'replaced' })
     .eq('id', oldPatient.id)
-    .eq('status', 'skipped')
+    .in('status', fromStatuses)
     .select('id')
     .maybeSingle();
   if (claimError) throw claimError;
   if (!claimed) return null;
 
-  const queue = await getTodayQueue(clinic);
   const tokenNumber = await takeNextTokenNumber(queue.id);
+
+  const row = {
+    clinic_id: clinic.id,
+    queue_id: queue.id,
+    names: oldPatient.names,
+    num_patients: oldPatient.num_patients,
+    token_number: tokenNumber,
+    status: 'waiting',
+    access_token: newAccessToken(),
+  };
+  if (asRejoined) row.checkin_status = 'rejoined'; // shows the "R" badge
 
   const { data: newPatient, error: insertError } = await supabase
     .from('patients')
-    .insert({
-      clinic_id: clinic.id,
-      queue_id: queue.id,
-      names: oldPatient.names,
-      num_patients: oldPatient.num_patients,
-      token_number: tokenNumber,
-      checkin_status: 'rejoined',
-      status: 'waiting',
-      access_token: newAccessToken(),
-    })
+    .insert(row)
     .select('*')
     .single();
-
   if (insertError) throw insertError;
   return newPatient;
 }
 
-// "Rejoin Queue" button on the patient's own token page
+// Skipped in the live queue → back at the end, marked R
+function rejoinSkippedPatient(clinic, oldPatient) {
+  return moveToCurrentQueue(clinic, oldPatient, { asRejoined: true, fromStatuses: ['skipped'] });
+}
+
+// The "Rejoin" / "Join the new queue" button on a patient's own token page
 async function rejoinQueue(clinic, accessToken) {
-  const oldPatient = await getPatientByAccessToken(clinic.id, accessToken);
-  if (!oldPatient || oldPatient.status !== 'skipped') return null;
-  return rejoinSkippedPatient(clinic, oldPatient);
+  const old = await getPatientByAccessToken(clinic.id, accessToken);
+  if (!old) return null;
+
+  const queue = await getTodayQueue(clinic);
+  const inLiveQueue = !!queue && old.queue_id === queue.id;
+
+  // Skipped: rejoin at the end (marked R if it is the same queue)
+  if (old.status === 'skipped') {
+    return moveToCurrentQueue(clinic, old, { asRejoined: inLiveQueue, fromStatuses: ['skipped'] });
+  }
+
+  // Left over from a session that has ended: join the new queue like anyone else
+  if (['waiting', 'called'].includes(old.status) && !inLiveQueue) {
+    return moveToCurrentQueue(clinic, old, { asRejoined: false, fromStatuses: ['waiting', 'called'] });
+  }
+
+  return null;
 }
 
 const RECENT_SKIP_MINUTES = 30;
@@ -475,6 +552,8 @@ const RECENT_SKIP_MINUTES = 30;
 // Used so that registering again counts as a rejoin instead of a brand-new entry.
 async function findRecentlySkippedByName(clinic, name, numPatients) {
   const queue = await getTodayQueue(clinic);
+  if (!queue) return null;
+
   const normalized = name.trim().toLowerCase();
   const since = new Date(Date.now() - RECENT_SKIP_MINUTES * 60 * 1000).toISOString();
 
@@ -537,6 +616,8 @@ async function markDone(clinicId, patientId) {
 
 async function findActivePatientByName(clinic, name, numPatients) {
   const queue = await getTodayQueue(clinic);
+  if (!queue) return null;
+
   const normalized = name.trim().toLowerCase();
   const windowStart = new Date(Date.now() - 2 * 60 * 1000).toISOString();
 
@@ -560,11 +641,15 @@ module.exports = {
   GRACE_PERIOD_SECONDS,
   getClinicBySlug,
   getClinicById,
+  getClinicForOwner,
   listClinics,
   listListedClinics,
+  listActiveClinics,
   createClinic,
   updateClinic,
+  setSessions,
   setQueuePausedStatus,
+  getQueueContext,
   getTodayQueue,
   registerPatient,
   getFullQueueDisplay,
@@ -576,7 +661,6 @@ module.exports = {
   confirmCheckinById,
   forceSkip,
   sweepExpiredCheckins,
-  recallSkippedPatient,
   cancelPatientToken,
   rejoinQueue,
   rejoinSkippedPatient,
