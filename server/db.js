@@ -308,9 +308,10 @@ async function getCapacity(clinic) {
   }
 
   const defaultLimit = session?.max_online_people ?? null;
-  const overridden = queue?.limit_override != null;
-  const limit = overridden ? queue.limit_override : defaultLimit;
-
+  // A staff override only means something while the owner still has a limit switched on
+  const overridden = defaultLimit !== null && queue?.limit_override != null;
+  const limit = defaultLimit === null ? null : (overridden ? queue.limit_override : defaultLimit);
+  
   // Closing-time estimate: will a new patient probably not be seen before the session ends?
   const avg = (await getAvgMinutesPerPerson(clinic.id)) ?? FALLBACK_MINS_PER_PERSON;
   const waitMin = peopleAhead * avg;
