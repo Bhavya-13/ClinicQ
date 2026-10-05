@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useClinic } from '../clinic';
 
@@ -17,6 +17,8 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [isPaused, setIsPaused] = useState(clinic.isPaused);
+  const [capacity, setCapacity] = useState(null);   // online token limit info
+  const [lateWarning, setLateWarning] = useState(''); // "you may not be seen before closing"
   const navigate = useNavigate();
 
   // Is online booking open right now? (the page updates by itself when this changes)
@@ -24,31 +26,65 @@ export default function Register() {
   const bookingClosed = !!schedule && schedule.bookingOpen === false;
   const closedCopy = CLOSED_COPY[schedule?.reason] || CLOSED_COPY.unavailable;
 
-  // Live pause/resume from staff
+  // Online token limit (null = this clinic has none)
+  const limitReached = !!capacity && capacity.limitReached;
+  const spotsLeft = capacity && capacity.limit !== null ? capacity.spotsLeft : null;
+  const maxPeople = spotsLeft !== null ? Math.max(1, Math.min(10, spotsLeft)) : 10;
+
+  const loadCapacity = useCallback(() => {
+    fetch(`${api}/capacity`, { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => { if (data) setCapacity(data); })
+      .catch(() => {});
+  }, [api]);
+
+  // Live pause/resume from staff, and live changes to how many spots are left
   useEffect(() => {
+    loadCapacity();
     socket.on('queue-paused-updated', setIsPaused);
-    return () => socket.off('queue-paused-updated', setIsPaused);
-  }, [socket]);
+    socket.on('full-queue-updated', loadCapacity);
+    socket.on('capacity-updated', loadCapacity);
+    return () => {
+      socket.off('queue-paused-updated', setIsPaused);
+      socket.off('full-queue-updated', loadCapacity);
+      socket.off('capacity-updated', loadCapacity);
+    };
+  }, [socket, loadCapacity]);
+
+  // If fewer spots are left than the group size, shrink the group
+  useEffect(() => {
+    setNumPatients(n => Math.min(n, maxPeople));
+  }, [maxPeople]);
 
   const handleNumChange = (val) => {
-    const n = Math.max(1, Math.min(10, parseInt(val) || 1));
+    const n = Math.max(1, Math.min(maxPeople, parseInt(val) || 1));
     setNumPatients(n);
+    setLateWarning('');
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const submit = async (acceptLate) => {
     setError('');
-    if (isPaused || bookingClosed) return;
+    if (isPaused || bookingClosed || limitReached) return;
     if (!name.trim()) { setError('Please enter your name.'); return; }
     setLoading(true);
     try {
       const res = await fetch(`${api}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ names: [name.trim()], numPatients }),
+        body: JSON.stringify({ names: [name.trim()], numPatients, acceptLate }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+
+      // The wait is longer than the time left: ask before giving a token
+      if (res.status === 409 && data.code === 'LATE_WARNING') {
+        setLateWarning(data.error);
+        return;
+      }
+      if (!res.ok) {
+        if (data.code === 'LIMIT_REACHED') loadCapacity();
+        throw new Error(data.error);
+      }
+
       navigate(`/c/${slug}/token/${data.patient.access_token}`, {
         state: { existing: data.existing, rejoined: data.rejoined },
       });
@@ -59,12 +95,40 @@ export default function Register() {
     }
   };
 
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    submit(false);
+  };
+
   const stepperButton = {
     width: '54px', height: '54px', borderRadius: '14px', border: 'none',
     background: 'white', boxShadow: '0 3px 10px rgba(30,58,95,0.1)',
     fontSize: '24px', fontWeight: '700', color: '#2d6a9f', cursor: 'pointer',
     transition: 'transform 0.15s',
   };
+
+  // A full-width notice that replaces the form (booking closed / online tokens full)
+  const blockCard = (icon, title, text, note) => (
+    <div style={{
+      background: '#f5f8fc', border: '1.5px solid #dbe6f3', borderRadius: '20px',
+      padding: '28px 22px', textAlign: 'center',
+    }}>
+      <div style={{ fontSize: '34px', marginBottom: '10px' }}>{icon}</div>
+      <h2 style={{ fontSize: '19px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 8px' }}>{title}</h2>
+      <p style={{ fontSize: '14px', color: '#5a6472', lineHeight: 1.6, margin: '0 0 14px' }}>{text}</p>
+      <p style={{ fontSize: '12.5px', color: '#a8b1bd', margin: '0 0 18px', lineHeight: 1.5 }}>{note}</p>
+      <button
+        type="button"
+        onClick={() => navigate('/')}
+        style={{
+          background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px',
+          padding: '11px 20px', fontSize: '14px', fontWeight: '700', cursor: 'pointer',
+        }}
+      >
+        Find another clinic
+      </button>
+    </div>
+  );
 
   return (
     <div style={{
@@ -114,41 +178,39 @@ export default function Register() {
 
           {schedule?.mode === 'sessions' && schedule.bookingOpen && (
             <p style={{
-              display: 'inline-block', margin: '14px 0 0', padding: '6px 14px', borderRadius: '20px',
+              display: 'inline-block', margin: '14px 6px 0', padding: '6px 14px', borderRadius: '20px',
               background: '#e8f8f5', color: '#00875f', fontSize: '12.5px', fontWeight: '700',
             }}>
               {schedule.sessionName} · {schedule.shortMessage}
+            </p>
+          )}
+
+          {!bookingClosed && !limitReached && spotsLeft !== null && spotsLeft <= 10 && (
+            <p style={{
+              display: 'inline-block', margin: '14px 6px 0', padding: '6px 14px', borderRadius: '20px',
+              background: '#fff3e0', color: '#c47f0a', fontSize: '12.5px', fontWeight: '700',
+            }}>
+              Only {spotsLeft} online spot{spotsLeft === 1 ? '' : 's'} left
             </p>
           )}
         </div>
 
         {bookingClosed ? (
           /* ── Booking is closed: explain why instead of showing the form ── */
-          <div style={{
-            background: '#f5f8fc', border: '1.5px solid #dbe6f3', borderRadius: '20px',
-            padding: '28px 22px', textAlign: 'center',
-          }}>
-            <div style={{ fontSize: '34px', marginBottom: '10px' }}>{closedCopy.icon}</div>
-            <h2 style={{ fontSize: '19px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 8px' }}>
-              {closedCopy.title}
-            </h2>
-            <p style={{ fontSize: '14px', color: '#5a6472', lineHeight: 1.6, margin: '0 0 14px' }}>
-              {schedule.message}
-            </p>
-            <p style={{ fontSize: '12.5px', color: '#a8b1bd', margin: '0 0 18px', lineHeight: 1.5 }}>
-              This page updates by itself when booking opens — no need to refresh.
-            </p>
-            <button
-              type="button"
-              onClick={() => navigate('/')}
-              style={{
-                background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px',
-                padding: '11px 20px', fontSize: '14px', fontWeight: '700', cursor: 'pointer',
-              }}
-            >
-              Find another clinic
-            </button>
-          </div>
+          blockCard(
+            closedCopy.icon,
+            closedCopy.title,
+            schedule.message,
+            'This page updates by itself when booking opens — no need to refresh.'
+          )
+        ) : limitReached ? (
+          /* ── Online tokens are full ── */
+          blockCard(
+            '🎟️',
+            'Online tokens are full',
+            `Online tokens${capacity.sessionName ? ` for ${capacity.sessionName}` : ''} are full. You can still visit the clinic and ask at the counter.`,
+            'This page updates by itself if more spots open up.'
+          )
         ) : (
           <>
             {isPaused && (
@@ -172,7 +234,7 @@ export default function Register() {
                 <input
                   type="text"
                   value={name}
-                  onChange={e => setName(e.target.value)}
+                  onChange={e => { setName(e.target.value); setLateWarning(''); }}
                   placeholder="e.g. Priya Sharma"
                   maxLength={60}
                   required
@@ -243,21 +305,53 @@ export default function Register() {
                 </div>
               )}
 
-              <button type="submit" disabled={loading || isPaused}
-                style={{
-                  width: '100%',
-                  background: loading || isPaused ? '#c3c9d1' : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
-                  color: 'white', border: 'none', borderRadius: '16px', padding: '17px',
-                  fontSize: '16px', fontWeight: '700',
-                  cursor: loading || isPaused ? 'not-allowed' : 'pointer',
-                  boxShadow: loading || isPaused ? 'none' : '0 10px 28px rgba(30,58,95,0.32)',
-                  letterSpacing: '0.3px', transition: 'transform 0.15s, box-shadow 0.15s',
-                }}
-                onMouseDown={e => { if (!loading && !isPaused) e.currentTarget.style.transform = 'scale(0.98)'; }}
-                onMouseUp={e => { e.currentTarget.style.transform = 'scale(1)'; }}
-              >
-                {isPaused ? 'Registrations Paused' : loading ? 'Registering...' : 'Get My Token →'}
-              </button>
+              {lateWarning ? (
+                /* ── "You may not be seen before closing. Register anyway?" ── */
+                <div style={{
+                  background: '#fff8e6', border: '1.5px solid #f5d38a', borderRadius: '18px',
+                  padding: '18px', textAlign: 'center',
+                }}>
+                  <div style={{ fontSize: '26px', marginBottom: '6px' }}>⚠️</div>
+                  <p style={{ margin: '0 0 6px', fontSize: '14.5px', fontWeight: '700', color: '#8a5a00', lineHeight: 1.5 }}>
+                    {lateWarning}
+                  </p>
+                  <p style={{ margin: '0 0 16px', fontSize: '14px', color: '#a56a00' }}>Register anyway?</p>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setLateWarning('')}
+                      disabled={loading}
+                      style={{ flex: 1, background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '14px', padding: '13px', fontSize: '14.5px', fontWeight: '700', cursor: 'pointer' }}
+                    >
+                      No, go back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => submit(true)}
+                      disabled={loading}
+                      style={{ flex: 1, background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '14px', padding: '13px', fontSize: '14.5px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1 }}
+                    >
+                      {loading ? 'Registering...' : 'Yes, register'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button type="submit" disabled={loading || isPaused}
+                  style={{
+                    width: '100%',
+                    background: loading || isPaused ? '#c3c9d1' : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
+                    color: 'white', border: 'none', borderRadius: '16px', padding: '17px',
+                    fontSize: '16px', fontWeight: '700',
+                    cursor: loading || isPaused ? 'not-allowed' : 'pointer',
+                    boxShadow: loading || isPaused ? 'none' : '0 10px 28px rgba(30,58,95,0.32)',
+                    letterSpacing: '0.3px', transition: 'transform 0.15s, box-shadow 0.15s',
+                  }}
+                  onMouseDown={e => { if (!loading && !isPaused) e.currentTarget.style.transform = 'scale(0.98)'; }}
+                  onMouseUp={e => { e.currentTarget.style.transform = 'scale(1)'; }}
+                >
+                  {isPaused ? 'Registrations Paused' : loading ? 'Checking...' : 'Get My Token →'}
+                </button>
+              )}
             </form>
           </>
         )}

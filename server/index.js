@@ -75,6 +75,28 @@ function withSchedule(clinic) {
   return { ...clinic, schedule: schedule.publicStatus(schedule.getStatus(clinic.sessions)) };
 }
 
+// The part of the capacity info that is safe to show to anyone
+function publicCapacity(cap) {
+  return {
+    sessionName: cap.sessionName,
+    limit: cap.limit,
+    defaultLimit: cap.defaultLimit,
+    overridden: cap.overridden,
+    onlinePeople: cap.onlinePeople,
+    spotsLeft: cap.spotsLeft,
+    limitReached: cap.limitReached,
+  };
+}
+
+// What to tell a patient when online tokens are full
+function limitMessage(cap, people = 1) {
+  const where = cap.sessionName ? ` for ${cap.sessionName}` : '';
+  if (cap.spotsLeft > 0 && people > cap.spotsLeft) {
+    return `Only ${cap.spotsLeft} online spot${cap.spotsLeft === 1 ? '' : 's'} left${where}. Please register fewer people, or ask at the clinic.`;
+  }
+  return `Online tokens${where} are full. You can still visit the clinic and ask at the counter.`;
+}
+
 // ── Clinic listing details (shown on the public homepage) ──
 const LISTING_FIELDS = {
   doctorName: { column: 'doctor_name', label: 'Doctor name', max: 80 },
@@ -243,6 +265,7 @@ ownerRouter.patch('/clinics/:id', requireOwner, async (req, res) => {
       sessionRows !== null;
     if (visibleChange) {
       io.to(roomFor(id)).emit('clinic-updated');
+      io.to(roomFor(id)).emit('capacity-updated');
       if (sessionRows !== null) {
         const full = await db.getClinicById(id);
         if (full) await broadcast(full);
@@ -325,6 +348,16 @@ clinicRouter.get('/info', (req, res) => {
   });
 });
 
+// How full the live queue's online tokens are (limit is null when the clinic has none)
+clinicRouter.get('/capacity', async (req, res) => {
+  try {
+    res.json(publicCapacity(await db.getCapacity(req.clinic)));
+  } catch (err) {
+    console.error('❌ capacity error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── Staff login ─────────────────────────────────────────────────────
 clinicRouter.post('/admin/login', (req, res) => {
   const key = `${req.ip}:${req.clinic.id}`;
@@ -403,7 +436,23 @@ clinicRouter.post('/register', async (req, res) => {
       }
     }
 
-    // 3. Brand-new registration
+    // 3. A brand-new token: check the online limit, then the closing-time estimate
+    const cap = await db.getCapacity(req.clinic);
+
+    if (cap.limit !== null && cap.onlinePeople + n > cap.limit) {
+      return res.status(403).json({ error: limitMessage(cap, n), code: 'LIMIT_REACHED' });
+    }
+
+    if (cap.likelyNotSeen && req.body?.acceptLate !== true) {
+      const ends = cap.endMs ? schedule.whenText(cap.endMs, Date.now()) : '';
+      return res.status(409).json({
+        code: 'LATE_WARNING',
+        error:
+          `You may not be seen before closing. The wait right now is about ${schedule.waitText(cap.waitMin)}` +
+          `${cap.sessionName && ends ? `, and ${cap.sessionName} ends ${ends}` : ''}.`,
+      });
+    }
+
     const patient = await db.registerPatient(req.clinic, [name], n);
     await broadcast(req.clinic);
     res.json({ success: true, patient, existing: false, rejoined: false });
@@ -503,6 +552,9 @@ clinicRouter.post('/rejoin/:accessToken', async (req, res) => {
     await broadcast(req.clinic);
     res.json({ success: true, patient });
   } catch (err) {
+    if (err.code === 'DAILY_LIMIT') {
+      return res.status(403).json({ error: limitMessage(err.capacity, err.people), code: 'LIMIT_REACHED' });
+    }
     console.error('❌ rejoin error:', err);
     res.status(500).json({ error: 'Server error' });
   }
@@ -590,6 +642,7 @@ clinicRouter.post('/admin/checkin', requireClinicAdmin, async (req, res) => {
 
 // Staff add a patient who has no phone. Works while paused and after booking closes,
 // as long as a session is running. The patient goes to the end of the queue.
+// Walk-ins never use up the online token limit.
 clinicRouter.post('/admin/walkin', requireClinicAdmin, async (req, res) => {
   try {
     const rawName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
@@ -600,7 +653,7 @@ clinicRouter.post('/admin/walkin', requireClinicAdmin, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Number of people must be 1 to 10' });
     }
 
-    const patient = await db.registerPatient(req.clinic, [rawName || 'Walk-in'], n);
+    const patient = await db.registerPatient(req.clinic, [rawName || 'Walk-in'], n, { source: 'walkin' });
     await broadcast(req.clinic);
 
     // Staff only need the number — the patient's private link is never returned here
@@ -616,6 +669,36 @@ clinicRouter.post('/admin/walkin', requireClinicAdmin, async (req, res) => {
       });
     }
     console.error('❌ admin/walkin error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Staff change today's online token limit (only for clinics that use one).
+// limit = a number, or null to go back to the usual limit.
+clinicRouter.post('/admin/limit', requireClinicAdmin, async (req, res) => {
+  try {
+    const raw = req.body?.limit;
+    const limit = raw === null ? null : Number(raw);
+    if (limit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 1000)) {
+      return res.status(400).json({ success: false, message: 'Enter a whole number from 1 to 1000' });
+    }
+
+    const before = await db.getCapacity(req.clinic);
+    if (before.defaultLimit === null) {
+      return res.status(400).json({ success: false, message: 'This clinic has no online token limit' });
+    }
+
+    // Same as the usual limit = nothing to override
+    await db.setQueueLimit(req.clinic, limit === before.defaultLimit ? null : limit);
+
+    const capacity = publicCapacity(await db.getCapacity(req.clinic));
+    io.to(roomFor(req.clinic.id)).emit('capacity-updated');
+    res.json({ success: true, capacity });
+  } catch (err) {
+    if (err.code === 'NO_ACTIVE_SESSION') {
+      return res.status(409).json({ success: false, message: 'No session is running right now.' });
+    }
+    console.error('❌ admin/limit error:', err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -696,6 +779,7 @@ setInterval(async () => {
       // First time we see a clinic we only remember it; later changes are announced
       if (previous !== undefined && previous !== key) {
         io.to(roomFor(clinic.id)).emit('clinic-updated');
+        io.to(roomFor(clinic.id)).emit('capacity-updated');
         await broadcast(clinic);
       }
     }

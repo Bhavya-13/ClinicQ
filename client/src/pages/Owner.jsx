@@ -85,7 +85,7 @@ const DEFAULT_NEW_SESSIONS = [
 function newSession(existing) {
   const used = existing.map(s => s.name);
   const base = DEFAULT_NEW_SESSIONS.find(d => !used.includes(d.name)) || DEFAULT_NEW_SESSIONS[1];
-  return { ...base, opensBeforeMin: 120, closesBeforeMin: 30, closedDays: [] };
+  return { ...base, opensBeforeMin: 120, closesBeforeMin: 30, closedDays: [], closingWarning: true, maxOnlinePeople: null };
 }
 
 // 30 → "30 min", 120 → "2 hr"
@@ -127,6 +127,8 @@ function sessionsFromClinic(clinic) {
       opensBeforeMin: s.booking_opens_before_min,
       closesBeforeMin: s.booking_closes_before_end_min,
       closedDays: (s.closed_days || []).map(Number),
+      closingWarning: s.closing_warning !== false,
+      maxOnlinePeople: s.max_online_people ?? null,
     }));
 }
 
@@ -138,6 +140,8 @@ function sessionsPayload(list) {
     opensBeforeMin: Number(s.opensBeforeMin),
     closesBeforeMin: Number(s.closesBeforeMin),
     closedDays: [...s.closedDays].map(Number).sort((a, b) => a - b),
+    closingWarning: s.closingWarning !== false,
+    maxOnlinePeople: s.maxOnlinePeople === null || s.maxOnlinePeople === undefined ? null : Number(s.maxOnlinePeople),
   }));
 }
 
@@ -154,6 +158,11 @@ function validateSessionsClient(sessions) {
       return `${name}: booking must open before the session starts — at most 12 hours earlier.`;
     if (s.closesBeforeMin > CLOSE_MAX)
       return `${name}: booking must close before the session ends — at most 4 hours earlier.`;
+    if (s.maxOnlinePeople !== null && s.maxOnlinePeople !== undefined) {
+      const limit = Number(s.maxOnlinePeople);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 1000)
+        return `${name}: the online token limit must be a whole number from 1 to 1000.`;
+    }
   }
   return '';
 }
@@ -599,6 +608,48 @@ function SessionsEditor({ sessions, onChange }) {
               })}
             </div>
             <p style={S.hint}>Tap a day to mark this session closed on that day.</p>
+            {/* Closing-time warning and optional online limit */}
+            <div style={{ marginTop: '18px', borderTop: '1px solid #e8eef5', paddingTop: '16px' }}>
+              <label style={S.label}>Busy-day settings</label>
+
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', marginBottom: '14px' }}>
+                <input
+                  type="checkbox"
+                  checked={s.closingWarning !== false}
+                  onChange={e => update(i, { closingWarning: e.target.checked })}
+                  style={{ marginTop: '3px' }}
+                />
+                <span style={{ fontSize: '14px', color: '#3d4a5c', lineHeight: 1.45 }}>
+                  <strong>Closing-time warning.</strong> Warn patients who probably won't be seen before the session ends, and let them choose whether to register anyway.
+                </span>
+              </label>
+
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={s.maxOnlinePeople !== null && s.maxOnlinePeople !== undefined}
+                  onChange={e => update(i, { maxOnlinePeople: e.target.checked ? 30 : null })}
+                  style={{ marginTop: '3px' }}
+                />
+                <span style={{ fontSize: '14px', color: '#3d4a5c', lineHeight: 1.45 }}>
+                  <strong>Limit online tokens.</strong> Stop online registration after this many people. Walk-ins added by staff don't count, and staff can raise the limit on the day.
+                </span>
+              </label>
+
+              {s.maxOnlinePeople !== null && s.maxOnlinePeople !== undefined && (
+                <div style={{ marginTop: '12px', maxWidth: '200px' }}>
+                  <label style={S.label}>Max people (online)</label>
+                  <input
+                    style={S.input}
+                    type="text"
+                    inputMode="numeric"
+                    value={s.maxOnlinePeople}
+                    onChange={e => update(i, { maxOnlinePeople: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                    placeholder="e.g. 30"
+                  />
+                </div>
+              )}
+            </div>
 
             {showPreview && (
               <div style={{ background: '#eaf3fc', border: '1px solid #d3e6f7', borderRadius: '12px', padding: '10px 14px', marginTop: '16px' }}>

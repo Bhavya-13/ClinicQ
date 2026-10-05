@@ -82,6 +82,16 @@ function untilText(ms, nowMs) {
   return istDateKey(ms) === istDateKey(nowMs) ? timeLabel(ms) : whenText(ms, nowMs);
 }
 
+// 45 → "45 min", 100 → "1 hr 40 min"
+function waitText(min) {
+  const m = Math.max(0, Math.round(min));
+  if (m < 1) return 'less than a minute';
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r === 0 ? `${h} hr` : `${h} hr ${r} min`;
+}
+
 // ["Morning"] → "Morning", ["Morning","Evening"] → "Morning and Evening"
 function joinNames(names) {
   return names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
@@ -266,6 +276,17 @@ function normalizeSessions(input) {
     if (closedDays.length >= 7)
       return { error: `${name}: it can't be closed every day — remove the session instead` };
 
+    // Closing-time warning is ON unless the owner switched it off
+    const closingWarning = item.closingWarning === undefined ? true : item.closingWarning === true;
+
+    // Online token limit: empty = no limit
+    let maxOnlinePeople = null;
+    if (item.maxOnlinePeople !== undefined && item.maxOnlinePeople !== null) {
+      maxOnlinePeople = Number(item.maxOnlinePeople);
+      if (!Number.isInteger(maxOnlinePeople) || maxOnlinePeople < 1 || maxOnlinePeople > 1000)
+        return { error: `${name}: the online token limit must be a whole number from 1 to 1000` };
+    }
+
     const duration = durationMin(startMin, endMin);
     if (duration + opensBefore <= closesBefore)
       return { error: `${name}: booking would close before it opens` };
@@ -277,6 +298,8 @@ function normalizeSessions(input) {
       booking_opens_before_min: opensBefore,
       booking_closes_before_end_min: closesBefore,
       closed_days: closedDays,
+      closing_warning: closingWarning,
+      max_online_people: maxOnlinePeople,
       _start: startMin,
       _duration: duration,
     });
@@ -320,6 +343,9 @@ module.exports = {
   OFFSET_MIN,
   istDateKey,
   addDaysToKey,
+  timeLabel,
+  whenText,
+  waitText,
   getStatus,
   publicStatus,
   normalizeSessions,

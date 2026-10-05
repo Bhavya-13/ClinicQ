@@ -22,6 +22,11 @@ export default function Admin() {
   const [isPaused, setIsPaused] = useState(clinic.isPaused);
   const [pauseLoading, setPauseLoading] = useState(false);
 
+  // Online token limit (only shown when the clinic uses one)
+  const [capacity, setCapacity] = useState(null);
+  const [limitInput, setLimitInput] = useState('');
+  const [limitSaving, setLimitSaving] = useState(false);
+
   // Walk-in form (people count is typed as text so the box can be emptied while typing)
   const [walkName, setWalkName] = useState('');
   const [walkCount, setWalkCount] = useState('1');
@@ -148,6 +153,53 @@ export default function Admin() {
       socket.off('queue-paused-updated', setIsPaused);
     };
   }, [socket]);
+  // How many online spots are used (updates live)
+  useEffect(() => {
+    const load = () => {
+      fetch(`${api}/capacity`, { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(data => {
+          if (!data) return;
+          setCapacity(data);
+          setLimitInput(prev => (prev === '' ? String(data.limit ?? '') : prev));
+        })
+        .catch(() => {});
+    };
+    load();
+    socket.on('full-queue-updated', load);
+    socket.on('capacity-updated', load);
+    return () => {
+      socket.off('full-queue-updated', load);
+      socket.off('capacity-updated', load);
+    };
+  }, [api, socket]);
+
+  // Change today's online limit (null = back to the usual limit)
+  const saveLimit = async (limit) => {
+    if (limitSaving) return;
+    setLimitSaving(true);
+    setMessage('');
+    try {
+      const res = await adminFetch('/admin/limit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit }),
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (data.success) {
+        setCapacity(data.capacity);
+        setLimitInput(String(data.capacity.limit ?? ''));
+      } else {
+        setMessage(data.message || 'Could not change the limit.');
+      }
+    } catch (err) {
+      setMessage('Something went wrong. Please try again.');
+      console.error(err);
+    } finally {
+      setLimitSaving(false);
+    }
+  };
 
   // ── Actions ─────────────────────────────────────────────────────────
   const runAction = async (path, showMessageAlways) => {
@@ -527,6 +579,77 @@ export default function Admin() {
             </div>
           </div>
         </div>
+        
+        {/* ── Online token limit (only shown when the clinic uses one) ── */}
+        {capacity && capacity.limit !== null && (
+          <div style={{ ...S.card, marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
+              <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: 0 }}>
+                Online tokens{capacity.sessionName ? ` · ${capacity.sessionName}` : ''}
+              </h2>
+              <span style={{ ...S.pill, background: capacity.limitReached ? '#ffd5d5' : '#dbeafe', color: capacity.limitReached ? '#e74c3c' : '#1e3a5f' }}>
+                {capacity.onlinePeople} / {capacity.limit} people
+              </span>
+            </div>
+
+            <div style={{ height: '10px', borderRadius: '10px', background: '#eef1f5', overflow: 'hidden', marginBottom: '10px' }}>
+              <div style={{
+                height: '100%', borderRadius: '10px', transition: 'width 0.3s',
+                width: `${Math.min(100, Math.round((capacity.onlinePeople / capacity.limit) * 100))}%`,
+                background: capacity.limitReached ? '#e74c3c' : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
+              }} />
+            </div>
+
+            <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#8a94a3', lineHeight: 1.5 }}>
+              {capacity.limitReached
+                ? 'Online tokens are full — patients can no longer register online.'
+                : `${capacity.spotsLeft} online spot${capacity.spotsLeft === 1 ? '' : 's'} left.`}
+              {' '}Walk-ins you add don't count towards the limit.
+            </p>
+
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                onClick={() => saveLimit(capacity.limit + 5)}
+                disabled={limitSaving}
+                style={{ background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '10px 14px', fontSize: '14px', fontWeight: '700', cursor: limitSaving ? 'not-allowed' : 'pointer', minHeight: '44px' }}
+              >
+                +5 people
+              </button>
+              <button
+                onClick={() => saveLimit(capacity.limit + 10)}
+                disabled={limitSaving}
+                style={{ background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '10px 14px', fontSize: '14px', fontWeight: '700', cursor: limitSaving ? 'not-allowed' : 'pointer', minHeight: '44px' }}
+              >
+                +10 people
+              </button>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={limitInput}
+                onChange={e => setLimitInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                aria-label="Online token limit for today"
+                style={{ width: '90px', border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '12px', padding: '10px 12px', fontSize: '16px', fontWeight: '700', textAlign: 'center', outline: 'none', boxSizing: 'border-box', minHeight: '44px' }}
+              />
+              <button
+                onClick={() => saveLimit(Number(limitInput))}
+                disabled={limitSaving}
+                style={{ background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '10px 16px', fontSize: '14px', fontWeight: '700', cursor: limitSaving ? 'not-allowed' : 'pointer', minHeight: '44px' }}
+              >
+                {limitSaving ? 'Saving...' : 'Set limit'}
+              </button>
+            </div>
+
+            {capacity.overridden && (
+              <button
+                onClick={() => saveLimit(null)}
+                disabled={limitSaving}
+                style={{ marginTop: '12px', background: 'none', border: 'none', color: '#8a94a3', fontSize: '13px', fontWeight: '600', textDecoration: 'underline', cursor: 'pointer', padding: '4px 0' }}
+              >
+                Back to the usual limit ({capacity.defaultLimit})
+              </button>
+            )}
+          </div>
+        )}
 
         {/* ── Waiting Queue ── */}
         <div style={{ ...S.card, marginBottom: '20px' }}>

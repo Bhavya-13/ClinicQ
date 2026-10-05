@@ -15,13 +15,16 @@ const GRACE_PERIOD_SECONDS = 60;
 // IST = UTC+5:30 with no daylight saving, so a fixed offset is safe.
 const CLINIC_UTC_OFFSET_MINUTES = 330;
 
+// Used for the closing-time estimate until a clinic has real averages
+const FALLBACK_MINS_PER_PERSON = 6;
+
 // Everything that may be shown publicly about a patient.
 // access_token is deliberately NOT included — it's the patient's private key.
 const PUBLIC_PATIENT_FIELDS =
   'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at';
 
 const SESSION_FIELDS =
-  'id, slot, name, start_time, end_time, booking_opens_before_min, booking_closes_before_end_min, closed_days';
+  'id, slot, name, start_time, end_time, booking_opens_before_min, booking_closes_before_end_min, closed_days, closing_warning, max_online_people';
 
 const CLINIC_ADMIN_FIELDS =
   'id, slug, name, doctor_name, specialty, area, city, address, timings, is_listed, day_reset_hour, is_active, is_paused, created_at';
@@ -277,9 +280,93 @@ async function takeNextTokenNumber(queueId) {
   return data;
 }
 
+// ── Capacity: online limit + closing-time estimate ─────────────────
+
+// Everything the register flow needs to know about how full the live queue is.
+async function getCapacity(clinic) {
+  const { queue, status } = await getQueueContext(clinic);
+
+  const session = status.active
+    ? (clinic.sessions || []).find(s => s.id === status.active.sessionId) || null
+    : null;
+
+  let onlinePeople = 0; // people with online tokens (cancelled / replaced ones give their spot back)
+  let peopleAhead = 0;  // everyone still waiting or being served, online or walk-in
+
+  if (queue) {
+    const { data, error } = await supabase
+      .from('patients')
+      .select('num_patients, status, checkin_status, source')
+      .eq('queue_id', queue.id);
+    if (error) throw error;
+
+    for (const p of data) {
+      const gone = p.status === 'done' && (p.checkin_status === 'cancelled' || p.checkin_status === 'replaced');
+      if (p.source === 'online' && !gone) onlinePeople += p.num_patients;
+      if (p.status === 'waiting' || p.status === 'called') peopleAhead += p.num_patients;
+    }
+  }
+
+  const defaultLimit = session?.max_online_people ?? null;
+  const overridden = queue?.limit_override != null;
+  const limit = overridden ? queue.limit_override : defaultLimit;
+
+  // Closing-time estimate: will a new patient probably not be seen before the session ends?
+  const avg = (await getAvgMinutesPerPerson(clinic.id)) ?? FALLBACK_MINS_PER_PERSON;
+  const waitMin = peopleAhead * avg;
+  const minutesLeft = status.active ? (status.active.endMs - Date.now()) / 60000 : null;
+  const closingWarning = !!session && session.closing_warning !== false;
+  const likelyNotSeen = closingWarning && minutesLeft !== null && waitMin >= minutesLeft;
+
+  return {
+    mode: status.mode,
+    sessionName: session?.name ?? status.active?.name ?? null,
+    limit,
+    defaultLimit,
+    overridden,
+    onlinePeople,
+    spotsLeft: limit === null ? null : Math.max(0, limit - onlinePeople),
+    limitReached: limit !== null && onlinePeople >= limit,
+    peopleAhead,
+    waitMin,
+    minutesLeft,
+    endMs: status.active ? status.active.endMs : null,
+    closingWarning,
+    likelyNotSeen,
+  };
+}
+
+// Throws DAILY_LIMIT if adding this many online people would go over today's limit
+async function assertRoomForOnline(clinic, people) {
+  const cap = await getCapacity(clinic);
+  if (cap.limit !== null && cap.onlinePeople + people > cap.limit) {
+    const err = new Error('Online token limit reached');
+    err.code = 'DAILY_LIMIT';
+    err.capacity = cap;
+    err.people = people;
+    throw err;
+  }
+  return cap;
+}
+
+// Staff change today's limit (null = go back to the usual one)
+async function setQueueLimit(clinic, limit) {
+  const queue = await getTodayQueue(clinic, { create: true });
+  if (!queue) {
+    const err = new Error('No session is running');
+    err.code = 'NO_ACTIVE_SESSION';
+    throw err;
+  }
+  const { error } = await supabase
+    .from('queues')
+    .update({ limit_override: limit })
+    .eq('id', queue.id);
+  if (error) throw error;
+}
+
 // ── Patients ───────────────────────────────────────────────────────
 
-async function registerPatient(clinic, names, numPatients) {
+async function registerPatient(clinic, names, numPatients, { source = 'online' } = {}) {
   const queue = await getTodayQueue(clinic, { create: true });
   if (!queue) {
     const err = new Error('No session is running');
@@ -297,6 +384,7 @@ async function registerPatient(clinic, names, numPatients) {
       num_patients: numPatients,
       token_number: tokenNumber,
       access_token: newAccessToken(),
+      source,
     })
     .select('*') // includes access_token — only ever sent to the patient who registered
     .single();
@@ -533,14 +621,16 @@ async function rejoinQueue(clinic, accessToken) {
   const queue = await getTodayQueue(clinic);
   const inLiveQueue = !!queue && old.queue_id === queue.id;
 
-  // Skipped: rejoin at the end (marked R if it is the same queue)
-  if (old.status === 'skipped') {
-    return moveToCurrentQueue(clinic, old, { asRejoined: inLiveQueue, fromStatuses: ['skipped'] });
+  // Skipped in the live queue: swaps the old token for a new one, so it never counts against the limit
+  if (old.status === 'skipped' && inLiveQueue) {
+    return moveToCurrentQueue(clinic, old, { asRejoined: true, fromStatuses: ['skipped'] });
   }
 
-  // Left over from a session that has ended: join the new queue like anyone else
-  if (['waiting', 'called'].includes(old.status) && !inLiveQueue) {
-    return moveToCurrentQueue(clinic, old, { asRejoined: false, fromStatuses: ['waiting', 'called'] });
+  // Left over from a session that has ended: joins the new queue like anyone else,
+  // so it does count towards the new session's online limit
+  if (!inLiveQueue && ['waiting', 'called', 'skipped'].includes(old.status)) {
+    await assertRoomForOnline(clinic, old.num_patients);
+    return moveToCurrentQueue(clinic, old, { asRejoined: false, fromStatuses: ['waiting', 'called', 'skipped'] });
   }
 
   return null;
@@ -651,6 +741,9 @@ module.exports = {
   setQueuePausedStatus,
   getQueueContext,
   getTodayQueue,
+  getCapacity,
+  assertRoomForOnline,
+  setQueueLimit,
   registerPatient,
   getFullQueueDisplay,
   getRecentlySkipped,
