@@ -61,6 +61,16 @@ function daysBetweenKeys(fromKey, toKey) {
 }
 
 // ── Wording ────────────────────────────────────────────────────────
+// The next moment (within 24 hours) when the IST clock reads "HH:MM". null if it isn't a time.
+function nextClockTimeMs(value, nowMs) {
+  const min = parseTime(value);
+  if (min === null) return null;
+  let ms = keyMidnightMs(istDateKey(nowMs)) + min * MIN_MS;
+  if (ms <= nowMs) ms += DAY_MIN * MIN_MS;
+  return ms;
+}
+
+
 function timeLabel(ms) {
   const d = new Date(ms + OFFSET_MIN * MIN_MS);
   const h = d.getUTCHours();
@@ -346,6 +356,7 @@ module.exports = {
   timeLabel,
   whenText,
   waitText,
+  nextClockTimeMs,
   getStatus,
   publicStatus,
   normalizeSessions,

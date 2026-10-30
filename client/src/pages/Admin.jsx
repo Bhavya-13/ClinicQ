@@ -8,6 +8,30 @@ function formatNames(names) {
   return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
 }
 
+// "Coming by 5:30 PM" for a waiting patient who said when they can reach the clinic
+function ArrivalChip({ patient, now }) {
+  if (!patient.arrival_by) return null;
+  const at = new Date(patient.arrival_by);
+  if (isNaN(at.getTime())) return null;
+
+  const time = at
+    .toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true })
+    .toUpperCase();
+  const passed = at.getTime() <= now;
+
+  return (
+    <span style={{
+      display: 'inline-block', marginTop: '6px', padding: '3px 10px', borderRadius: '20px',
+      fontSize: '12px', fontWeight: '700',
+      background: passed ? '#e8f8f5' : '#fff3e0',
+      color: passed ? '#00875f' : '#c47f0a',
+    }}>
+      {passed ? `Said they'd be here by ${time}` : `Coming by ${time}`}
+    </span>
+  );
+}
+
+
 export default function Admin() {
   const { slug, clinic, api, socket } = useClinic();
   // Separate login per clinic, even in the same browser
@@ -26,6 +50,12 @@ export default function Admin() {
   const [capacity, setCapacity] = useState(null);
   const [limitInput, setLimitInput] = useState('');
   const [limitSaving, setLimitSaving] = useState(false);
+  // Ticks so "Coming by 5:30 PM" turns green once that time has passed
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Walk-in form (people count is typed as text so the box can be emptied while typing)
   const [walkName, setWalkName] = useState('');
@@ -507,6 +537,7 @@ export default function Admin() {
                 <span style={{ fontSize: '12px', color: '#aaa' }}>Next up</span>
                 <span style={{ fontSize: '13px', fontWeight: '700', color: '#1e3a5f' }}>
                   #{waitingQueue[0].token_number} — {formatNames(waitingQueue[0].names)}
+                  <ArrivalChip patient={waitingQueue[0]} now={now} />
                 </span>
               </div>
             )}
@@ -676,6 +707,7 @@ export default function Admin() {
                         Group of {p.num_patients} · {new Date(p.created_at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })}
                         {p.checkin_status === 'rejoined' && <span style={{ color: '#e67e22', marginLeft: '6px' }}>· Back after skip</span>}
                       </p>
+                      <ArrivalChip patient={p} now={now} />
                     </div>
                   </div>
                   {i === 0 && (

@@ -533,6 +533,68 @@ clinicRouter.post('/cancel/:accessToken', async (req, res) => {
   }
 });
 
+// Patient tells the clinic when they can reach it. Information only — the queue order never changes.
+const ARRIVAL_MAX_MS = 8 * 60 * 60 * 1000;
+
+clinicRouter.post('/arrival/:accessToken', async (req, res) => {
+  try {
+    const patient = await db.getPatientByAccessToken(req.clinic.id, req.params.accessToken);
+    if (!patient) return res.status(404).json({ error: 'Token not found' });
+    if (patient.status !== 'waiting') {
+      return res.status(400).json({ error: 'You can only set this while you are waiting in the queue.' });
+    }
+
+    const queue = await db.getTodayQueue(req.clinic);
+    if (!queue || queue.id !== patient.queue_id) {
+      return res.status(400).json({ error: 'This queue has ended.' });
+    }
+
+    const body = req.body || {};
+    const now = Date.now();
+    let arrivalMs = null; // null = remove
+
+    if (body.clear !== true) {
+      if (body.minutes !== undefined) {
+        const minutes = Number(body.minutes);
+        if (!Number.isInteger(minutes) || minutes < 1 || minutes > 240) {
+          return res.status(400).json({ error: 'Choose between 1 minute and 4 hours.' });
+        }
+        arrivalMs = now + minutes * 60 * 1000;
+      } else {
+        arrivalMs = schedule.nextClockTimeMs(body.time, now);
+        if (arrivalMs === null) return res.status(400).json({ error: 'Please pick a valid time.' });
+        if (arrivalMs - now > ARRIVAL_MAX_MS) {
+          return res.status(400).json({ error: 'Pick a time within the next 8 hours.' });
+        }
+      }
+
+      // Nobody can arrive after the session is over
+      const active = req.schedule.active;
+      if (active && arrivalMs > active.endMs) {
+        return res.status(400).json({
+          error: `That's after ${active.name} ends (${schedule.whenText(active.endMs, now)}). Pick an earlier time.`,
+        });
+      }
+    }
+
+    const updated = await db.setArrivalBy(
+      req.clinic.id,
+      req.params.accessToken,
+      arrivalMs === null ? null : new Date(arrivalMs).toISOString()
+    );
+    if (!updated) {
+      return res.status(400).json({ error: 'You can only set this while you are waiting in the queue.' });
+    }
+
+    await broadcast(req.clinic); // staff see it straight away
+    res.json({ success: true, arrival_by: updated.arrival_by });
+  } catch (err) {
+    console.error('❌ arrival error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
 // Skipped patient rejoins (end of queue), or a leftover patient joins the new session's queue
 clinicRouter.post('/rejoin/:accessToken', async (req, res) => {
   try {

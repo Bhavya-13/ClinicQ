@@ -21,7 +21,7 @@ const FALLBACK_MINS_PER_PERSON = 6;
 // Everything that may be shown publicly about a patient.
 // access_token is deliberately NOT included — it's the patient's private key.
 const PUBLIC_PATIENT_FIELDS =
-  'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at';
+  'id, clinic_id, queue_id, names, num_patients, token_number, status, checkin_status, skip_reason, called_at, checkin_deadline, done_at, created_at, arrival_by';
 
 const SESSION_FIELDS =
   'id, slot, name, start_time, end_time, booking_opens_before_min, booking_closes_before_end_min, closed_days, closing_warning, max_online_people';
@@ -548,6 +548,22 @@ async function sweepExpiredCheckins() {
   return data || [];
 }
 
+// A waiting patient tells the clinic when they can reach it (null = remove). Information only.
+// Returns the patient (public fields), or null if they are no longer waiting.
+async function setArrivalBy(clinicId, accessToken, arrivalIso) {
+  const { data, error } = await supabase
+    .from('patients')
+    .update({ arrival_by: arrivalIso })
+    .eq('clinic_id', clinicId)
+    .eq('access_token', accessToken)
+    .eq('status', 'waiting')
+    .select(PUBLIC_PATIENT_FIELDS)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+
 // A patient cancels their own token (waiting, or called but not yet checked in).
 // Everyone behind them moves up. Not counted in the wait-time average.
 async function cancelPatientToken(clinicId, accessToken) {
@@ -756,6 +772,7 @@ module.exports = {
   forceSkip,
   sweepExpiredCheckins,
   cancelPatientToken,
+  setArrivalBy,
   rejoinQueue,
   rejoinSkippedPatient,
   findRecentlySkippedByName,

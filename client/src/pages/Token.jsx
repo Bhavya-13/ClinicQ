@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useClinic } from '../clinic';
+import ArrivalTime from '../components/ArrivalTime';
 
 function formatNames(names) {
   if (!names || names.length === 0) return '';
@@ -220,6 +221,8 @@ export default function Token() {
   const myIndex = patient ? activeQueue.findIndex(p => p.id === patient.id) : -1;
   const peopleAhead = activeQueue.slice(0, myIndex).reduce((sum, p) => sum + p.num_patients, 0);
   const estimatedMins = avgMins !== null && myIndex > 0 ? Math.round(peopleAhead * avgMins) : null;
+  // For the "when can you arrive?" warning: minutes until this patient's turn (0 = next in line)
+  const waitMinutes = myIndex === 0 ? 0 : estimatedMins;
 
   const formatEstimate = (mins) => {
     if (mins < 1) return 'Less than a minute';
@@ -495,6 +498,17 @@ export default function Token() {
             CLINIC<span style={{ color: '#2d6a9f' }}>Q</span>
           </p>
         </div>
+
+        {isWaiting && (
+          <ArrivalTime
+            api={api}
+            accessToken={accessToken}
+            arrivalBy={patient.arrival_by}
+            waitMinutes={waitMinutes}
+            onChange={(arrivalBy) => setPatient(prev => ({ ...prev, arrival_by: arrivalBy }))}
+          />
+        )}
+
 
         {/* ── Cancel my token ── */}
         {canCancel && (
