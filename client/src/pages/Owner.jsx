@@ -685,7 +685,100 @@ function ResetHourField({ hour, onChange }) {
   );
 }
 
-function CreateClinicForm({ ownerFetch, onCreated }) {
+// ── Extra styling for the dashboard ────────────────────────────────
+const POLISH_CSS = `
+  @keyframes cqo-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  .cqo-rise { animation: cqo-rise .4s ease both; }
+  .cqo-hero { position: relative; overflow: hidden; border-radius: 22px; padding: 26px 24px; color: white; margin-bottom: 16px;
+    background: linear-gradient(150deg, #16304f 0%, #1e3a5f 45%, #2d6a9f 100%); box-shadow: 0 12px 30px rgba(30,58,95,.25); }
+  .cqo-hero::after { content: ''; position: absolute; right: -60px; top: -80px; width: 240px; height: 240px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(143,208,255,.45), transparent 70%); pointer-events: none; }
+  .cqo-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+  .cqo-toolbar { display: flex; gap: 10px; margin-bottom: 18px; align-items: stretch; }
+  .cqo-clinic { transition: box-shadow .18s ease, transform .18s ease; }
+  .cqo-clinic:hover { box-shadow: 0 10px 28px rgba(30,58,95,.12) !important; }
+  .cqo-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
+  @media (max-width: 700px) {
+    .cqo-stats { grid-template-columns: repeat(2, 1fr); }
+    .cqo-toolbar { flex-direction: column; }
+    .cqo-hero { padding: 20px 18px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .cqo-rise { animation: none !important; } }
+`;
+
+function useOwnerPolish() {
+  useEffect(() => {
+    const id = 'clinicq-owner-polish';
+    let style = document.getElementById(id);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = id;
+      document.head.appendChild(style);
+    }
+    style.innerHTML = POLISH_CSS;
+  }, []);
+}
+
+const AVATARS = [
+  'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
+  'linear-gradient(135deg,#0f9b8e,#38d9a9)',
+  'linear-gradient(135deg,#7b4bd6,#a78bfa)',
+  'linear-gradient(135deg,#e67e22,#f6ad55)',
+  'linear-gradient(135deg,#d6336c,#f783ac)',
+  'linear-gradient(135deg,#2b8a3e,#69db7c)',
+];
+
+function avatarFor(name) {
+  let h = 0;
+  for (const ch of String(name || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return AVATARS[h % AVATARS.length];
+}
+
+function initialsOf(name) {
+  const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+  return ((words[0]?.[0] || '') + (words[1]?.[0] || '')).toUpperCase() || 'C';
+}
+
+function StatTile({ value, label, tone, delay }) {
+  const tones = { blue: '#2d6a9f', green: '#00a37a', purple: '#7b4bd6', amber: '#e67e22' };
+  return (
+    <div className="cqo-rise" style={{
+      background: 'white', borderRadius: '16px', padding: '14px 16px', boxShadow: '0 2px 12px rgba(30,58,95,0.06)',
+      border: '1px solid #eaeff5', animationDelay: `${delay}ms`,
+    }}>
+      <p style={{ margin: 0, fontSize: '28px', fontWeight: 900, color: tones[tone], lineHeight: 1.1 }}>{value}</p>
+      <p style={{ margin: '4px 0 0', fontSize: '12px', fontWeight: 700, color: '#8a94a3' }}>{label}</p>
+    </div>
+  );
+}
+
+// One link: opens it, with a copy button next to it
+function LinkButton({ label, url, copied, onCopy }) {
+  return (
+    <div style={{ display: 'flex', borderRadius: '12px', overflow: 'hidden', border: '2px solid #dbeafe', background: 'white' }}>
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        style={{ flex: 1, padding: '10px 12px', color: '#2d6a9f', fontWeight: 700, fontSize: '13.5px', textDecoration: 'none', textAlign: 'center' }}
+      >
+        {label} ↗
+      </a>
+      <button
+        type="button"
+        onClick={onCopy}
+        style={{
+          border: 'none', borderLeft: '2px solid #dbeafe', padding: '0 14px', fontSize: '12.5px', fontWeight: 700, cursor: 'pointer',
+          background: copied ? '#e8f8f5' : '#f7faff', color: copied ? '#00875f' : '#5a6472', fontFamily: 'inherit',
+        }}
+      >
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+    </div>
+  );
+}
+
+function CreateClinicForm({ ownerFetch, onCreated, onCancel }) {
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
@@ -728,10 +821,6 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
       if (!res.ok) return setError(data.error || 'Could not create the clinic.');
 
       onCreated(data.clinic);
-      setName(''); setSlug(''); setSlugTouched(false);
-      setPin(''); setPinConfirm(''); setHour(16);
-      setSessions([]);
-      setListing(EMPTY_LISTING);
     } catch {
       setError('Could not reach the server.');
     } finally {
@@ -740,8 +829,11 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
   };
 
   return (
-    <form onSubmit={submit} className="cq-owner-card" style={S.card}>
-      <h2 style={{ fontSize: '17px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 18px' }}>Add a clinic</h2>
+    <form onSubmit={submit} className="cq-owner-card cqo-rise" style={S.card}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '18px' }}>
+        <h2 style={{ fontSize: '18px', fontWeight: '800', color: '#1e3a5f', margin: 0 }}>Add a clinic</h2>
+        <button type="button" style={S.secondary} onClick={onCancel}>Close</button>
+      </div>
 
       <p style={S.sectionTitle}>Clinic setup</p>
       <div style={S.grid}>
@@ -784,7 +876,7 @@ function CreateClinicForm({ ownerFetch, onCreated }) {
   );
 }
 
-function ClinicCard({ clinic, ownerFetch, onUpdated }) {
+function ClinicCard({ clinic, ownerFetch, onUpdated, index }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(clinic.name);
   const [hour, setHour] = useState(clinic.day_reset_hour);
@@ -806,6 +898,28 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
   const doctorLine = [clinic.doctor_name, clinic.specialty].filter(Boolean).join(' · ');
   const placeLine = [clinic.area, clinic.city].filter(Boolean).join(', ');
   const hasSessions = clinic.sessions && clinic.sessions.length > 0;
+
+  // What is this clinic doing right now?
+  const schedule = clinic.schedule;
+  const bookingClosed = hasSessions && schedule && !schedule.bookingOpen;
+  let stripe = '#00b894';
+  let statusText = 'Open all day';
+  let statusTone = { bg: '#e8f8f5', fg: '#00875f' };
+  if (!clinic.is_active) {
+    stripe = '#c3cad3';
+    statusText = 'Turned off';
+    statusTone = { bg: '#f1f3f6', fg: '#6b7684' };
+  } else if (clinic.is_paused) {
+    stripe = '#f39c12';
+    statusText = 'Registrations paused';
+    statusTone = { bg: '#fff3e0', fg: '#c47f0a' };
+  } else if (hasSessions && schedule) {
+    statusText = `${schedule.sessionName ? `${schedule.sessionName} — ` : ''}${schedule.shortMessage}`;
+    if (bookingClosed) {
+      stripe = '#f39c12';
+      statusTone = { bg: '#fff3e0', fg: '#c47f0a' };
+    }
+  }
 
   const startEditing = () => {
     setName(clinic.name);
@@ -879,43 +993,52 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
     }
   };
 
-  const badge = (text, bg, color) => (
-    <span style={{ fontSize: '12px', fontWeight: '700', padding: '5px 12px', borderRadius: '20px', background: bg, color }}>{text}</span>
+  const chip = (text, bg, fg) => (
+    <span style={{ fontSize: '12px', fontWeight: 700, padding: '5px 12px', borderRadius: '999px', background: bg, color: fg, lineHeight: 1.3 }}>
+      {text}
+    </span>
   );
 
   return (
-    <div className="cq-owner-card" style={{ ...S.card, opacity: clinic.is_active ? 1 : 0.7 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap', marginBottom: '14px' }}>
-        <div style={{ minWidth: 0 }}>
-          <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 4px' }}>{clinic.name}</h3>
-          {doctorLine && <p style={{ fontSize: '13.5px', color: '#2d6a9f', fontWeight: '600', margin: '0 0 2px' }}>{doctorLine}</p>}
-          {placeLine && <p style={{ fontSize: '13px', color: '#6b7684', margin: '0 0 2px' }}>📍 {placeLine}</p>}
-          <p style={{ fontSize: '13px', color: '#8a94a3', margin: 0 }}>
-            /c/{clinic.slug} · {sessionSummary(clinic)}
-            {clinic.is_paused && ' · registrations paused'}
-          </p>
-          {hasSessions && clinic.schedule && (
-            <p style={{ fontSize: '13px', color: '#2d6a9f', fontWeight: '600', margin: '4px 0 0' }}>
-              Right now: {clinic.schedule.sessionName ? `${clinic.schedule.sessionName} — ` : ''}{clinic.schedule.shortMessage}
-            </p>
-          )}
+    <div
+      className="cq-owner-card cqo-clinic cqo-rise"
+      style={{
+        ...S.card, borderLeft: `5px solid ${stripe}`, opacity: clinic.is_active ? 1 : 0.8,
+        animationDelay: `${Math.min(index || 0, 8) * 60}ms`,
+      }}
+    >
+      <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{
+          width: '52px', height: '52px', borderRadius: '16px', background: avatarFor(clinic.name), color: 'white', flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '18px',
+          boxShadow: '0 6px 14px rgba(30,58,95,0.18)',
+        }}>
+          {initialsOf(clinic.name)}
         </div>
+
+        <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#1e3a5f', margin: '0 0 4px', wordBreak: 'break-word' }}>{clinic.name}</h3>
+          {doctorLine && <p style={{ fontSize: '13.5px', color: '#2d6a9f', fontWeight: 600, margin: '0 0 2px' }}>{doctorLine}</p>}
+          {placeLine && <p style={{ fontSize: '13px', color: '#6b7684', margin: '0 0 2px' }}>📍 {placeLine}</p>}
+          <p style={{ fontSize: '12.5px', color: '#a8b1bd', margin: '4px 0 0', wordBreak: 'break-word' }}>
+            /c/{clinic.slug} · {sessionSummary(clinic)}
+          </p>
+        </div>
+
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          {clinic.is_active ? badge('Active', '#e8f8f5', '#00a37a') : badge('Turned off', '#f0f0f0', '#888')}
-          {clinic.is_listed ? badge('Listed in search', '#e8f2ff', '#2d6a9f') : badge('Not listed', '#f7f7f7', '#999')}
           {!editing && <button style={S.secondary} onClick={startEditing}>Edit</button>}
         </div>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '14px 0' }}>
+        {chip(statusText, statusTone.bg, statusTone.fg)}
+        {clinic.is_active ? chip('Active', '#e8f8f5', '#00875f') : chip('Turned off', '#f0f0f0', '#888')}
+        {clinic.is_listed ? chip('Listed in search', '#e8f2ff', '#2d6a9f') : chip('Not listed', '#f4f4f4', '#999')}
+      </div>
+
+      <div className="cqo-links">
         {links.map(({ label, url }) => (
-          <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#f7f9fc', borderRadius: '10px', padding: '8px 12px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '12px', fontWeight: '700', color: '#5a6472', width: '62px' }}>{label}</span>
-            <a href={url} target="_blank" rel="noreferrer" style={{ fontSize: '13px', color: '#2d6a9f', wordBreak: 'break-all', flex: '1 1 200px' }}>{url}</a>
-            <button style={{ ...S.secondary, padding: '4px 10px', fontSize: '12px' }} onClick={() => copy(label, url)}>
-              {copied === label ? 'Copied!' : 'Copy'}
-            </button>
-          </div>
+          <LinkButton key={label} label={label} url={url} copied={copied === label} onCopy={() => copy(label, url)} />
         ))}
       </div>
 
@@ -960,6 +1083,7 @@ function ClinicCard({ clinic, ownerFetch, onUpdated }) {
 
 export default function Owner() {
   useOwnerStyles();
+  useOwnerPolish();
 
   const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY) || '');
   const [secret, setSecret] = useState('');
@@ -967,6 +1091,8 @@ export default function Owner() {
   const [clinics, setClinics] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [notice, setNotice] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
+  const [search, setSearch] = useState('');
 
   const logout = (reason = '') => {
     sessionStorage.removeItem(TOKEN_KEY);
@@ -1034,9 +1160,19 @@ export default function Owner() {
   if (!token) {
     return (
       <div className="cq-owner-page" style={{ ...S.page, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <form onSubmit={handleLogin} className="cq-owner-card" style={{ ...S.card, width: '100%', maxWidth: '360px', textAlign: 'center', marginBottom: 0 }}>
-          <p style={{ fontSize: '12px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', margin: '0 0 6px' }}>CLINICQ</p>
-          <p style={{ fontSize: '17px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 18px' }}>Owner access</p>
+        <form onSubmit={handleLogin} className="cq-owner-card cqo-rise" style={{ ...S.card, width: '100%', maxWidth: '360px', textAlign: 'center', marginBottom: 0, padding: '32px 28px' }}>
+          <p style={{ fontSize: '12px', fontWeight: 800, letterSpacing: '4px', color: '#bbb', margin: '0 0 16px' }}>
+            CLINIC<span style={{ color: '#2d6a9f' }}>Q</span>
+          </p>
+          <div style={{
+            width: '58px', height: '58px', margin: '0 auto 14px', borderRadius: '16px', fontSize: '26px',
+            background: 'linear-gradient(150deg,#1e3a5f,#2d6a9f)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 8px 20px rgba(30,58,95,0.25)',
+          }}>
+            🔑
+          </div>
+          <p style={{ fontSize: '19px', fontWeight: 800, color: '#1e3a5f', margin: '0 0 4px' }}>Owner access</p>
+          <p style={{ fontSize: '13px', color: '#8a94a3', margin: '0 0 18px' }}>Enter your owner password to manage clinics</p>
           <input
             type="password"
             value={secret}
@@ -1052,46 +1188,124 @@ export default function Owner() {
     );
   }
 
+  // Numbers for the dashboard
+  const activeCount = clinics.filter(c => c.is_active).length;
+  const listedCount = clinics.filter(c => c.is_active && c.is_listed).length;
+  const takingTokens = clinics.filter(c => c.is_active && !c.is_paused && (!c.schedule || c.schedule.bookingOpen)).length;
+
+  const words = search.toLowerCase().split(/\s+/).filter(Boolean);
+  const visible = clinics.filter(c => {
+    if (words.length === 0) return true;
+    const text = [c.name, c.slug, c.doctor_name, c.specialty, c.area, c.city].filter(Boolean).join(' ').toLowerCase();
+    return words.every(w => text.includes(w));
+  });
+
   return (
     <div className="cq-owner-page" style={S.page}>
-      <div style={{ maxWidth: '900px', margin: '0 auto' }}>
+      <div style={{ maxWidth: '960px', margin: '0 auto' }}>
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', gap: '12px', flexWrap: 'wrap' }}>
-          <div>
-            <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', textTransform: 'uppercase', margin: '0 0 4px' }}>
-              Clinic<span style={{ color: '#2d6a9f' }}>Q</span> · Owner
-            </p>
-            <h1 className="cq-owner-title" style={{ fontSize: '26px', fontWeight: '900', color: '#1e3a5f', margin: 0 }}>Clinics</h1>
-          </div>
-          <div className="cq-owner-actions" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-            <a href="/" target="_blank" rel="noreferrer" style={{ ...S.secondary, textDecoration: 'none' }}>View homepage ↗</a>
-            <button style={S.secondary} onClick={() => logout()}>🔒 Log out</button>
+        {/* ── Header ── */}
+        <div className="cqo-hero cqo-rise">
+          <div style={{ position: 'relative', zIndex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '14px', flexWrap: 'wrap' }}>
+            <div>
+              <p style={{ margin: '0 0 6px', fontSize: '11px', fontWeight: 800, letterSpacing: '3px', textTransform: 'uppercase', opacity: 0.8 }}>
+                Clinic<span style={{ color: '#8fd0ff' }}>Q</span> · Owner
+              </p>
+              <h1 className="cq-owner-title" style={{ margin: '0 0 6px', fontSize: '30px', fontWeight: 900, letterSpacing: '-0.5px' }}>Your clinics</h1>
+              <p style={{ margin: 0, fontSize: '14px', opacity: 0.85, maxWidth: '420px', lineHeight: 1.5 }}>
+                Set up sessions, share links and see what each clinic is doing right now.
+              </p>
+            </div>
+            <div className="cq-owner-actions" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <a
+                href="/"
+                target="_blank"
+                rel="noreferrer"
+                style={{ background: 'rgba(255,255,255,0.14)', color: 'white', border: '2px solid rgba(255,255,255,0.28)', borderRadius: '12px', padding: '9px 14px', fontSize: '13px', fontWeight: 700, textDecoration: 'none' }}
+              >
+                View homepage ↗
+              </a>
+              <button
+                onClick={() => logout()}
+                style={{ background: 'rgba(255,255,255,0.14)', color: 'white', border: '2px solid rgba(255,255,255,0.28)', borderRadius: '12px', padding: '9px 14px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+              >
+                🔒 Log out
+              </button>
+            </div>
           </div>
         </div>
 
+        {/* ── Numbers ── */}
+        <div className="cqo-stats">
+          <StatTile value={clinics.length} label="Clinics" tone="blue" delay={0} />
+          <StatTile value={activeCount} label="Active" tone="green" delay={60} />
+          <StatTile value={listedCount} label="Listed in search" tone="purple" delay={120} />
+          <StatTile value={takingTokens} label="Taking tokens now" tone="amber" delay={180} />
+        </div>
+
         {notice && (
-          <div style={{ background: '#f0f7ff', border: '1.5px solid #cce0f5', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
-            <p style={{ margin: 0, color: '#2d6a9f', fontWeight: '600', fontSize: '14px', lineHeight: 1.45 }}>{notice}</p>
-            <button onClick={() => setNotice('')} style={{ background: 'none', border: 'none', color: '#2d6a9f', cursor: 'pointer', fontWeight: '700' }}>✕</button>
+          <div style={{ background: '#f0f7ff', border: '1.5px solid #cce0f5', borderRadius: '14px', padding: '14px 18px', marginBottom: '18px', display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+            <p style={{ margin: 0, color: '#2d6a9f', fontWeight: 600, fontSize: '14px', lineHeight: 1.45 }}>{notice}</p>
+            <button onClick={() => setNotice('')} style={{ background: 'none', border: 'none', color: '#2d6a9f', cursor: 'pointer', fontWeight: 700 }}>✕</button>
           </div>
         )}
 
-        <CreateClinicForm
-          ownerFetch={ownerFetch}
-          onCreated={(clinic) => {
-            setClinics(prev => [...prev, clinic]);
-            setNotice(`"${clinic.name}" created. Share its staff PIN with the clinic privately — it can't be viewed again.`);
-          }}
-        />
+        {/* ── Search + add ── */}
+        <div className="cqo-toolbar">
+          <input
+            type="search"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search your clinics by name, link, doctor or area"
+            aria-label="Search clinics"
+            style={{ ...S.input, flex: 1, background: 'white', minHeight: '48px' }}
+          />
+          <button
+            style={{ ...S.primary, padding: '0 22px', minHeight: '48px', whiteSpace: 'nowrap' }}
+            onClick={() => setShowCreate(s => !s)}
+          >
+            {showCreate ? '✕ Close form' : '+ Add clinic'}
+          </button>
+        </div>
 
-        <h2 style={{ fontSize: '15px', fontWeight: '800', color: '#5a6472', margin: '8px 0 14px', textTransform: 'uppercase', letterSpacing: '1px' }}>
-          {loadingList ? 'Loading clinics...' : `${clinics.length} clinic${clinics.length === 1 ? '' : 's'}`}
+        {showCreate && (
+          <CreateClinicForm
+            ownerFetch={ownerFetch}
+            onCancel={() => setShowCreate(false)}
+            onCreated={(clinic) => {
+              setClinics(prev => [...prev, clinic]);
+              setShowCreate(false);
+              setNotice(`"${clinic.name}" created. Share its staff PIN with the clinic privately — it can't be viewed again.`);
+            }}
+          />
+        )}
+
+        <h2 style={{ fontSize: '13px', fontWeight: 800, color: '#8a94a3', margin: '4px 0 14px', textTransform: 'uppercase', letterSpacing: '1.5px' }}>
+          {loadingList
+            ? 'Loading clinics...'
+            : words.length > 0
+              ? `${visible.length} of ${clinics.length} clinic${clinics.length === 1 ? '' : 's'}`
+              : `${clinics.length} clinic${clinics.length === 1 ? '' : 's'}`}
         </h2>
 
-        {clinics.map(clinic => (
+        {!loadingList && clinics.length === 0 && (
+          <div className="cqo-rise" style={{ ...S.card, textAlign: 'center', padding: '36px 24px' }}>
+            <div style={{ fontSize: '34px', marginBottom: '8px' }}>🏥</div>
+            <p style={{ margin: '0 0 6px', fontSize: '17px', fontWeight: 800, color: '#1e3a5f' }}>No clinics yet</p>
+            <p style={{ margin: '0 0 16px', fontSize: '14px', color: '#8a94a3' }}>Add your first clinic to get its patient, staff and display links.</p>
+            <button style={S.primary} onClick={() => setShowCreate(true)}>+ Add clinic</button>
+          </div>
+        )}
+
+        {!loadingList && clinics.length > 0 && visible.length === 0 && (
+          <p style={{ textAlign: 'center', color: '#8a94a3', fontSize: '14px', padding: '24px 0' }}>No clinics match "{search.trim()}".</p>
+        )}
+
+        {visible.map((clinic, i) => (
           <ClinicCard
             key={clinic.id}
             clinic={clinic}
+            index={i}
             ownerFetch={ownerFetch}
             onUpdated={(updated, msg) => {
               setClinics(prev => prev.map(c => (c.id === updated.id ? updated : c)));

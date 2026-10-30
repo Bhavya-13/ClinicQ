@@ -65,9 +65,18 @@ export default function Token() {
   const fetchPatient = useCallback(() => {
     fetch(`${api}/patient/${accessToken}`)
       .then(r => (r.ok ? r.json() : null))
-      .then(data => { setPatient(data); setLoading(false); })
+            .then(data => {
+        setPatient(data);
+        setLoading(false);
+        // Remember an active token so the homepage can offer a quick "back to my token" card
+        try {
+          if (data && !data.queueEnded && (data.status === 'waiting' || data.status === 'called')) {
+            localStorage.setItem('cq_active_token', JSON.stringify({ slug, accessToken, clinicName: clinic.name }));
+          }
+        } catch { /* storage may be blocked, that's fine */ }
+      })
       .catch(() => { setPatient(null); setLoading(false); });
-  }, [api, accessToken]);
+    }, [api, accessToken, slug, clinic.name]);
 
   useEffect(() => {
     setPatient(null);
