@@ -1211,9 +1211,9 @@ export default function Owner() {
               <p style={{ margin: '0 0 6px', fontSize: '11px', fontWeight: 800, letterSpacing: '3px', textTransform: 'uppercase', opacity: 0.8 }}>
                 Clinic<span style={{ color: '#8fd0ff' }}>Q</span> · Owner
               </p>
-              <h1 className="cq-owner-title" style={{ margin: '0 0 6px', fontSize: '30px', fontWeight: 900, letterSpacing: '-0.5px' }}>Your clinics</h1>
+              <h1 className="cq-owner-title" style={{ margin: '0 0 6px', fontSize: '30px', fontWeight: 900, letterSpacing: '-0.5px' }}>Clinic network</h1>
               <p style={{ margin: 0, fontSize: '14px', opacity: 0.85, maxWidth: '420px', lineHeight: 1.5 }}>
-                Set up sessions, share links and see what each clinic is doing right now.
+                Every clinic on ClinicQ. Set up sessions, share links and see what each one is doing right now.
               </p>
             </div>
             <div className="cq-owner-actions" style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
