@@ -703,7 +703,44 @@ const POLISH_CSS = `
     .cqo-toolbar { flex-direction: column; }
     .cqo-hero { padding: 20px 18px; }
   }
-  @media (prefers-reduced-motion: reduce) { .cqo-rise { animation: none !important; } }
+    /* ── Add-clinic form: inputs, toggles, layout ── */
+  .cq-owner-page input:not([type=checkbox]):hover { border-color: #cfdceb !important; }
+  .cq-owner-page input:not([type=checkbox]):focus { border-color: #2d6a9f !important; background: #ffffff !important; box-shadow: 0 0 0 4px rgba(45,106,159,.14); }
+  .cq-owner-page input::placeholder { color: #b3bcc7; }
+  .cq-owner-page input[type=checkbox] { appearance: none; -webkit-appearance: none; width: 42px; height: 24px; border-radius: 999px; background: #d5dce6;
+    position: relative; cursor: pointer; flex-shrink: 0; margin: 0; outline: none; transition: background .2s ease; }
+  .cq-owner-page input[type=checkbox]::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: white; box-shadow: 0 2px 5px rgba(0,0,0,.25); transition: transform .2s ease; }
+  .cq-owner-page input[type=checkbox]:checked { background: linear-gradient(135deg, #1e3a5f, #2d6a9f); }
+  .cq-owner-page input[type=checkbox]:checked::after { transform: translateX(18px); }
+  .cq-owner-page input[type=checkbox]:focus-visible { box-shadow: 0 0 0 4px rgba(45,106,159,.25); }
+
+  .cqo-form { padding: 0 !important; overflow: hidden; }
+  .cqo-form-head { position: relative; overflow: hidden; padding: 24px 26px 22px; color: white; background: linear-gradient(135deg, #16304f 0%, #1e3a5f 45%, #2d6a9f 100%); }
+  .cqo-form-head::after { content: ''; position: absolute; right: -50px; top: -70px; width: 240px; height: 240px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(143,208,255,.5), transparent 70%); pointer-events: none; }
+  .cqo-form-body { padding: 26px 26px 26px; }
+  .cqo-form-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  .cqo-form-main { display: flex; flex-direction: column; gap: 30px; min-width: 0; }
+  .cqo-side { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .cqo-section { position: relative; border: 1.5px solid #e8eef5; border-radius: 20px; padding: 28px 20px 20px; background: #fcfdff; }
+  .cqo-tab { position: absolute; top: -14px; left: 18px; display: inline-flex; align-items: center; gap: 8px; padding: 5px 13px 5px 6px; border-radius: 999px;
+    background: white; border: 1.5px solid #dbe6f3; font-size: 12.5px; font-weight: 800; color: #1e3a5f; box-shadow: 0 4px 12px rgba(30,58,95,.08); }
+  .cqo-tab-n { width: 21px; height: 21px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; color: white;
+    background: linear-gradient(135deg, #1e3a5f, #2d6a9f); transition: background .3s ease; }
+  .cqo-tab-n.done { background: linear-gradient(135deg, #00a37a, #38d9a9); }
+  .cqo-progress { height: 8px; border-radius: 999px; background: rgba(255,255,255,.22); overflow: hidden; }
+  .cqo-progress > span { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #9be7ff, #b8ffe0); transition: width .45s ease; }
+  .cqo-live-dot { width: 8px; height: 8px; border-radius: 50%; background: #00b894; display: inline-block; animation: cqo-pulse 1.8s infinite; }
+  @keyframes cqo-pulse { 0% { box-shadow: 0 0 0 0 rgba(0,184,148,.55); } 70% { box-shadow: 0 0 0 8px rgba(0,184,148,0); } 100% { box-shadow: 0 0 0 0 rgba(0,184,148,0); } }
+  @media (max-width: 900px) {
+    .cqo-form-grid { grid-template-columns: 1fr; }
+    .cqo-side { position: static; }
+    .cqo-form-body { padding: 24px 14px 18px; }
+    .cqo-form-head { padding: 20px 16px 18px; }
+    .cqo-form-main { gap: 28px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .cqo-rise { animation: none !important; } .cqo-live-dot { animation: none !important; } }
 `;
 
 function useOwnerPolish() {
@@ -778,7 +815,334 @@ function LinkButton({ label, url, copied, onCopy }) {
   );
 }
 
+// ── Pieces for the "Add a clinic" form ─────────────────────────────
+
+// A card with a little numbered tab on its top edge (turns into a green tick when done)
+function FormSection({ step, label, done, optional, delay = 0, children }) {
+  return (
+    <div className="cqo-section cqo-rise" style={{ animationDelay: `${delay}ms` }}>
+      <span className="cqo-tab">
+        <span className={`cqo-tab-n ${done ? 'done' : ''}`}>{done ? '✓' : step}</span>
+        {label}
+        {optional && <span style={{ color: '#a8b1bd', fontWeight: 700 }}>· optional</span>}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+// 0 = nothing / not digits, 1 = too short, 2 = okay, 3 = good, 4 = strong
+function pinStrength(pin) {
+  if (!pin || !/^\d+$/.test(pin)) return 0;
+  if (pin.length < 6) return 1;
+  const simple = /^(\d)\1+$/.test(pin) || '0123456789'.includes(pin) || '9876543210'.includes(pin);
+  if (pin.length < 8 || simple) return 2;
+  return pin.length >= 10 ? 4 : 3;
+}
+
+function PinMeter({ pin }) {
+  if (!pin) return null;
+  const level = pinStrength(pin);
+  const colors = ['#e74c3c', '#e74c3c', '#f39c12', '#27ae60', '#00a37a'];
+  const labels = ['Digits only', 'Too short', 'Okay', 'Good', 'Strong'];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '8px' }}>
+      <div style={{ display: 'flex', gap: '4px', flex: 1 }}>
+        {[1, 2, 3, 4].map(i => (
+          <span key={i} style={{ flex: 1, height: '5px', borderRadius: '999px', background: i <= level ? colors[level] : '#e3e9f1', transition: 'background .2s' }} />
+        ))}
+      </div>
+      <span style={{ fontSize: '12px', fontWeight: 700, color: colors[level], minWidth: '62px', textAlign: 'right' }}>{labels[level]}</span>
+    </div>
+  );
+}
+
+function previewIcon(specialty) {
+  const s = String(specialty || '').toLowerCase();
+  if (!s) return '';
+  if (/dent|teeth|oral/.test(s)) return '🦷';
+  if (/child|pedia|paedia|kid/.test(s)) return '🧒';
+  if (/skin|derma|hair|cosmet/.test(s)) return '✨';
+  if (/eye|ophth|vision/.test(s)) return '👁️';
+  if (/heart|cardio/.test(s)) return '❤️';
+  if (/ortho|bone|joint|physio/.test(s)) return '🦴';
+  if (/\bent\b|ear|nose|throat/.test(s)) return '👂';
+  if (/gyn|women|maternity|obst/.test(s)) return '🌸';
+  if (/psych|mental|counsel/.test(s)) return '🧠';
+  if (/general|physician|family|medicine|gp/.test(s)) return '🩺';
+  return '';
+}
+
+// How the clinic will look on the homepage — updates as you type
+function ClinicPreview({ name, listing, sessions }) {
+  const doctorLine = [listing.doctorName, listing.specialty].filter(Boolean).join(' · ');
+  const placeLine = [listing.area, listing.city].filter(Boolean).join(', ');
+  const icon = previewIcon(listing.specialty);
+  const display = name.trim() || 'Your clinic name';
+
+  const first = sessions[0];
+  const startMin = first ? toMinutes(first.startTime) : null;
+  const status = first && startMin !== null
+    ? `${first.name.trim() || 'Session'} · booking opens ${formatMinutes(startMin - first.opensBeforeMin)}`
+    : 'Taking tokens now';
+
+  return (
+    <div>
+      <p style={{ margin: '0 0 8px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: '#8a94a3' }}>
+        <span className="cqo-live-dot" /> Live preview
+      </p>
+      <div style={{ background: 'white', borderRadius: '22px', padding: '18px', border: '1px solid #e8eef5', boxShadow: '0 10px 30px rgba(30,58,95,0.12)' }}>
+        <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start', marginBottom: '12px' }}>
+          <div style={{
+            width: '56px', height: '56px', borderRadius: '17px', flexShrink: 0, color: 'white', fontWeight: 800,
+            fontSize: icon ? '26px' : '19px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: name.trim() ? avatarFor(name) : 'linear-gradient(135deg,#c9d3e0,#dfe6ef)', boxShadow: '0 8px 18px rgba(30,58,95,0.18)',
+          }}>
+            {icon || (name.trim() ? initialsOf(name) : '?')}
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <p style={{ margin: '0 0 3px', fontSize: '17px', fontWeight: 800, letterSpacing: '-0.3px', wordBreak: 'break-word', color: name.trim() ? '#12263f' : '#c3cad3' }}>
+              {display}
+            </p>
+            <p style={{ margin: 0, fontSize: '13.5px', fontWeight: 700, color: doctorLine ? '#2d6a9f' : '#d3d9e1' }}>
+              {doctorLine || 'Doctor · Specialty'}
+            </p>
+          </div>
+        </div>
+
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '6px 12px', borderRadius: '999px', background: '#e8f8f5', color: '#00875f', fontSize: '12.5px', fontWeight: 700 }}>
+          <span className="cqo-live-dot" /> {status}
+        </span>
+
+        <div style={{ margin: '14px 0', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: placeLine ? '#5a6472' : '#d3d9e1' }}>📍 {placeLine || 'Area, City'}</p>
+          {listing.address && <p style={{ margin: 0, fontSize: '12.5px', color: '#a8b1bd', paddingLeft: '22px' }}>{listing.address}</p>}
+          <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: listing.timings ? '#5a6472' : '#d3d9e1' }}>🕒 {listing.timings || 'Timings'}</p>
+        </div>
+
+        <div style={{
+          textAlign: 'center', borderRadius: '13px', padding: '11px', fontWeight: 800, fontSize: '14px', color: 'white',
+          background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', boxShadow: '0 8px 18px rgba(30,58,95,0.25)',
+        }}>
+          Get my token →
+        </div>
+      </div>
+
+      <p style={{ margin: '8px 4px 0', fontSize: '12px', color: listing.isListed ? '#00875f' : '#a8b1bd', fontWeight: 600, lineHeight: 1.45 }}>
+        {listing.isListed
+          ? '✓ This card will show on the homepage.'
+          : 'Not shown on the homepage yet — turn on "Show in public search" below.'}
+      </p>
+    </div>
+  );
+}
+
 function CreateClinicForm({ ownerFetch, onCreated, onCancel }) {
+  const [name, setName] = useState('');
+  const [slug, setSlug] = useState('');
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [pin, setPin] = useState('');
+  const [pinConfirm, setPinConfirm] = useState('');
+  const [hour, setHour] = useState(16);
+  const [sessions, setSessions] = useState([]);
+  const [listing, setListing] = useState(EMPTY_LISTING);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleName = (value) => {
+    setName(value);
+    if (!slugTouched) setSlug(slugify(value));
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!name.trim()) return setError('Clinic name is required.');
+    if (!SLUG_PATTERN.test(slug) || slug.length < 3 || slug.length > 40)
+      return setError('Link name must be 3–40 lowercase letters, numbers or hyphens (e.g. dr-sharma).');
+    if (!PIN_PATTERN.test(pin)) return setError('PIN must be 6–12 digits.');
+    if (pin !== pinConfirm) return setError('The two PINs do not match.');
+
+    const sessionProblem = validateSessionsClient(sessions);
+    if (sessionProblem) return setError(sessionProblem);
+
+    setSaving(true);
+    try {
+      const res = await ownerFetch('/clinics', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: name.trim(), slug, pin, dayResetHour: Number(hour),
+          sessions: sessionsPayload(sessions), ...listing,
+        }),
+      });
+      if (!res) return;
+      const data = await res.json();
+      if (!res.ok) return setError(data.error || 'Could not create the clinic.');
+
+      onCreated(data.clinic);
+    } catch {
+      setError('Could not reach the server.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Live checks, only used for the visual feedback
+  const nameOk = !!name.trim();
+  const slugOk = SLUG_PATTERN.test(slug) && slug.length >= 3 && slug.length <= 40;
+  const pinOk = PIN_PATTERN.test(pin);
+  const confirmOk = pinOk && pin === pinConfirm;
+  const basicsDone = nameOk && slugOk && pinOk && confirmOk;
+  const listingFilled = !!(listing.doctorName.trim() || listing.specialty.trim() || listing.area.trim() || listing.city.trim());
+  const points = [nameOk, slugOk, pinOk, confirmOk, sessions.length > 0, listingFilled].filter(Boolean).length;
+  const pct = Math.round((points / 6) * 100);
+
+  const hintStyle = { margin: '6px 0 0', fontSize: '12px', fontWeight: 600, lineHeight: 1.4 };
+
+  return (
+    <form onSubmit={submit} className="cqo-form cqo-rise" style={S.card}>
+
+      {/* ── Header with live progress ── */}
+      <div className="cqo-form-head">
+        <div style={{ position: 'relative', zIndex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+          <div style={{ display: 'flex', gap: '14px', alignItems: 'center', minWidth: 0 }}>
+            <div style={{
+              width: '50px', height: '50px', borderRadius: '15px', flexShrink: 0, fontSize: '24px', display: 'flex',
+              alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.16)', border: '1.5px solid rgba(255,255,255,0.3)',
+            }}>
+              🏥
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ margin: '0 0 3px', fontSize: '22px', fontWeight: 900, letterSpacing: '-0.4px' }}>Add a clinic</h2>
+              <p style={{ margin: 0, fontSize: '13.5px', opacity: 0.85, lineHeight: 1.45 }}>
+                Takes about a minute. The clinic gets its own patient, staff and display links.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{ background: 'rgba(255,255,255,0.14)', color: 'white', border: '1.5px solid rgba(255,255,255,0.3)', borderRadius: '12px', padding: '8px 14px', fontSize: '13px', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}
+          >
+            Close
+          </button>
+        </div>
+
+        <div style={{ position: 'relative', zIndex: 1, marginTop: '18px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontWeight: 700, marginBottom: '7px', opacity: 0.92 }}>
+            <span>{basicsDone ? '✓ Ready to create' : 'Setup progress'}</span>
+            <span>{pct}%</span>
+          </div>
+          <div className="cqo-progress"><span style={{ width: `${pct}%` }} /></div>
+        </div>
+      </div>
+
+      <div className="cqo-form-body">
+        <div className="cqo-form-grid">
+
+          {/* ── Left: the form ── */}
+          <div className="cqo-form-main">
+
+            <FormSection step={1} label="The basics" done={basicsDone}>
+              <div style={S.grid}>
+                <div>
+                  <label style={S.label}>Clinic name</label>
+                  <input style={S.input} value={name} maxLength={80} onChange={e => handleName(e.target.value)} placeholder="e.g. Sharma Clinic" />
+                </div>
+                <div>
+                  <label style={S.label}>Link name</label>
+                  <input
+                    style={S.input}
+                    value={slug}
+                    maxLength={40}
+                    onChange={e => { setSlugTouched(true); setSlug(e.target.value.toLowerCase()); }}
+                    placeholder="e.g. dr-sharma"
+                  />
+                  {slug ? (
+                    <p style={{ ...hintStyle, color: slugOk ? '#00875f' : '#e67e22' }}>
+                      {slugOk ? '✓ Looks good' : 'Use 3–40 lowercase letters, numbers or single hyphens'}
+                    </p>
+                  ) : (
+                    <p style={S.hint}>This becomes the clinic's web address</p>
+                  )}
+                </div>
+                <div>
+                  <label style={S.label}>Staff PIN (6–12 digits)</label>
+                  <input style={S.input} type="password" inputMode="numeric" value={pin} onChange={e => setPin(e.target.value)} />
+                  <PinMeter pin={pin} />
+                </div>
+                <div>
+                  <label style={S.label}>Confirm PIN</label>
+                  <input style={S.input} type="password" inputMode="numeric" value={pinConfirm} onChange={e => setPinConfirm(e.target.value)} />
+                  {pinConfirm && (
+                    <p style={{ ...hintStyle, color: confirmOk ? '#00875f' : '#e67e22' }}>
+                      {confirmOk ? '✓ PINs match' : "PINs don't match yet"}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </FormSection>
+
+            <FormSection step={2} label="Opening hours" done={sessions.length > 0} optional delay={80}>
+              {sessions.length === 0 && <div style={{ marginBottom: '18px', maxWidth: '300px' }}><ResetHourField hour={hour} onChange={setHour} /></div>}
+              <SessionsEditor sessions={sessions} onChange={setSessions} />
+            </FormSection>
+
+            <FormSection step={3} label="Public listing" done={listingFilled} optional delay={160}>
+              <ListingFields values={listing} onChange={setListing} />
+            </FormSection>
+          </div>
+
+          {/* ── Right: live preview ── */}
+          <aside className="cqo-side">
+            <ClinicPreview name={name} listing={listing} sessions={sessions} />
+
+            <div style={{ background: 'white', borderRadius: '18px', padding: '14px 16px', border: '1px solid #e8eef5' }}>
+              <p style={{ margin: '0 0 10px', fontSize: '12px', fontWeight: 800, letterSpacing: '1.5px', textTransform: 'uppercase', color: '#8a94a3' }}>
+                Links we'll create
+              </p>
+              {[['Patients', 'register'], ['Staff', 'admin'], ['Display', 'display']].map(([label, path]) => (
+                <div key={label} style={{ display: 'flex', gap: '10px', alignItems: 'baseline', padding: '5px 0' }}>
+                  <span style={{ width: '58px', fontSize: '12.5px', fontWeight: 800, color: '#5a6472', flexShrink: 0 }}>{label}</span>
+                  <span style={{ fontSize: '12.5px', fontWeight: 600, wordBreak: 'break-all', color: slugOk ? '#2d6a9f' : '#c3cad3' }}>
+                    /c/{slugOk ? slug : 'your-link'}/{path}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ background: '#fff8ec', border: '1.5px solid #f5d38a', borderRadius: '16px', padding: '12px 14px' }}>
+              <p style={{ margin: 0, fontSize: '13px', fontWeight: 600, color: '#9a6400', lineHeight: 1.5 }}>
+                🔐 Share the staff PIN with the clinic privately. It can't be viewed again after the clinic is created.
+              </p>
+            </div>
+          </aside>
+        </div>
+
+        {error && (
+          <div style={{ marginTop: '22px', background: '#fff0f0', border: '1.5px solid #ffcccc', borderRadius: '14px', padding: '12px 16px', display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+            <span>⚠️</span>
+            <p style={{ margin: 0, color: '#cc0000', fontSize: '14px', fontWeight: 600, lineHeight: 1.45 }}>{error}</p>
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={saving}
+          style={{
+            ...S.primary, width: '100%', marginTop: '22px', padding: '16px', fontSize: '16px', fontWeight: 800,
+            borderRadius: '16px', boxShadow: '0 12px 28px rgba(30,58,95,0.3)', opacity: saving ? 0.7 : 1,
+          }}
+        >
+          {saving ? 'Creating...' : '✨ Create clinic'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+
+function OldCreateClinicForm({ ownerFetch, onCreated, onCancel }) {
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [slugTouched, setSlugTouched] = useState(false);
