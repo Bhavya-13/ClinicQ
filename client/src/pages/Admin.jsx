@@ -1,11 +1,157 @@
 import { useEffect, useState } from 'react';
 import { useClinic } from '../clinic';
 
+// ── Look and feel ────────────────────────────────────────────────────
+const C = {
+  navy: '#1e3a5f', blue: '#2d6a9f', ink: '#1a2433', mute: '#8a94a3', soft: '#a8b1bd',
+  line: '#e6ebf2', green: '#27ae60', red: '#e74c3c', amber: '#c47f0a',
+};
+
+const ADMIN_CSS = `
+  .cqa-page { min-height: 100vh; background: #f0f4f8; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; color: #1a2433; padding: 24px; box-sizing: border-box; }
+  .cqa-page * { box-sizing: border-box; }
+  .cqa-wrap { max-width: 1200px; margin: 0 auto; }
+  .cqa-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+  .cqa-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .cqa-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .cqa-main { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+  .cqa-col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .cqa-serving { display: flex; align-items: center; gap: 18px; margin-bottom: 16px; }
+  .cqa-walkrow { display: flex; gap: 10px; flex-wrap: wrap; }
+  .cqa-scroll { max-height: 440px; overflow-y: auto; padding-right: 2px; }
+  .cqa-btn:active:not(:disabled) { transform: scale(0.98); }
+  @media (max-width: 900px) {
+    .cqa-page { padding: 14px 12px 28px; }
+    .cqa-main { display: flex; flex-direction: column; gap: 14px; }
+    .cqa-col { display: contents; }
+    .cqa-now { order: 1; }
+    .cqa-walkin { order: 2; }
+    .cqa-waiting { order: 3; }
+    .cqa-tokens { order: 4; }
+    .cqa-skipped { order: 5; }
+    .cqa-qr { order: 6; }
+    .cqa-actions { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); }
+    .cqa-actions > * { width: 100%; padding-left: 8px !important; padding-right: 8px !important; }
+    .cqa-serving { flex-direction: column; text-align: center; gap: 12px; }
+    .cqa-scroll { max-height: 420px; }
+    .cqa-h1 { font-size: 22px !important; }
+  }
+`;
+
+// Always refreshes, so edits show up straight away while you are developing
+function useAdminStyles() {
+  useEffect(() => {
+    const id = 'clinicq-admin-styles';
+    let style = document.getElementById(id);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = id;
+      document.head.appendChild(style);
+    }
+    style.innerHTML = ADMIN_CSS;
+  }, []);
+}
+
+const cardStyle = {
+  background: 'white', borderRadius: '18px', padding: '20px', border: `1px solid ${C.line}`,
+  boxShadow: '0 2px 12px rgba(30,58,95,0.06)', minWidth: 0,
+};
+
+function Card({ title, subtitle, right, className, children, style }) {
+  return (
+    <section className={className} style={{ ...cardStyle, ...style }}>
+      {(title || right) && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: subtitle ? '4px' : '14px' }}>
+          <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 800, color: C.navy }}>{title}</h2>
+          {right}
+        </div>
+      )}
+      {subtitle && <p style={{ margin: '0 0 14px', fontSize: '12.5px', color: C.soft, lineHeight: 1.45 }}>{subtitle}</p>}
+      {children}
+    </section>
+  );
+}
+
+const CHIP_TONES = {
+  blue: { bg: '#dbeafe', fg: C.navy },
+  navy: { bg: C.navy, fg: 'white' },
+  green: { bg: '#e8f8f5', fg: '#00875f' },
+  red: { bg: '#ffe0e0', fg: C.red },
+  amber: { bg: '#fff3e0', fg: C.amber },
+  grey: { bg: '#f1f3f6', fg: '#6b7684' },
+};
+
+function Chip({ tone = 'blue', children, style }) {
+  const t = CHIP_TONES[tone] || CHIP_TONES.blue;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '6px', padding: '5px 12px', borderRadius: '999px',
+      fontSize: '12.5px', fontWeight: 700, background: t.bg, color: t.fg, lineHeight: 1.3, ...style,
+    }}>
+      {children}
+    </span>
+  );
+}
+
+function btn(kind, disabled = false) {
+  const base = {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '8px', minHeight: '44px',
+    padding: '10px 16px', borderRadius: '12px', fontSize: '14px', fontWeight: 700, fontFamily: 'inherit',
+    border: '2px solid transparent', textDecoration: 'none', cursor: disabled ? 'not-allowed' : 'pointer',
+    transition: 'transform 0.1s, box-shadow 0.15s',
+  };
+  const kinds = {
+    primary: { background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', boxShadow: '0 6px 16px rgba(30,58,95,0.25)' },
+    success: { background: 'linear-gradient(135deg,#27ae60,#2ecc71)', color: 'white', boxShadow: '0 6px 16px rgba(39,174,96,0.3)' },
+    outline: { background: 'white', color: C.blue, borderColor: '#dbeafe' },
+    danger: { background: 'white', color: C.red, borderColor: '#ffd5d5' },
+    okOutline: { background: 'white', color: C.green, borderColor: '#cdeedb' },
+    ghost: { background: '#f4f6fa', color: '#556070', borderColor: C.line },
+    warn: { background: '#fff3e0', color: C.amber, borderColor: '#f5d38a' },
+    disabled: { background: '#eef1f5', color: '#aab3bf' },
+  };
+  return { ...base, ...kinds[disabled && kind === 'primary' ? 'disabled' : kind], opacity: disabled && kind !== 'primary' ? 0.65 : 1 };
+}
+
+const inputStyle = {
+  border: `2px solid ${C.line}`, background: '#fbfcfe', borderRadius: '12px', padding: '11px 14px',
+  fontSize: '16px', color: C.ink, outline: 'none', minHeight: '46px', fontFamily: 'inherit',
+};
+
+function Notice({ tone = 'amber', children, onClose }) {
+  const looks = {
+    amber: { bg: '#fff8ec', border: '#f5d38a', fg: '#9a6400' },
+    blue: { bg: '#f0f7ff', border: '#cce0f5', fg: C.blue },
+  };
+  const l = looks[tone];
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px',
+      background: l.bg, border: `1.5px solid ${l.border}`, borderRadius: '14px', padding: '12px 16px', marginBottom: '14px',
+    }}>
+      <p style={{ margin: 0, color: l.fg, fontWeight: 600, fontSize: '14px', lineHeight: 1.5 }}>{children}</p>
+      {onClose && (
+        <button
+          onClick={onClose}
+          aria-label="Dismiss"
+          style={{ background: 'none', border: 'none', color: l.fg, fontSize: '16px', fontWeight: 700, cursor: 'pointer', padding: 0, lineHeight: 1 }}
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
 function formatNames(names) {
   if (!names || names.length === 0) return '';
   if (names.length === 1) return names[0];
   if (names.length === 2) return `${names[0]} & ${names[1]}`;
   return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+}
+
+function formatTime(iso) {
+  return new Date(iso).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
 // "Coming by 5:30 PM" for a waiting patient who said when they can reach the clinic
@@ -20,19 +166,58 @@ function ArrivalChip({ patient, now }) {
   const passed = at.getTime() <= now;
 
   return (
-    <span style={{
-      display: 'inline-block', marginTop: '6px', padding: '3px 10px', borderRadius: '20px',
-      fontSize: '12px', fontWeight: '700',
-      background: passed ? '#e8f8f5' : '#fff3e0',
-      color: passed ? '#00875f' : '#c47f0a',
-    }}>
+    <Chip tone={passed ? 'green' : 'amber'} style={{ marginTop: '6px', padding: '3px 10px', fontSize: '12px' }}>
       {passed ? `Said they'd be here by ${time}` : `Coming by ${time}`}
-    </span>
+    </Chip>
   );
 }
 
+// The token number as a bold tile
+function TokenTile({ number, tone = 'light', rejoined = false }) {
+  const looks = {
+    navy: { bg: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', fg: 'white' },
+    red: { bg: '#ffe3e3', fg: C.red },
+    light: { bg: '#eaf0f7', fg: C.navy },
+  };
+  const l = looks[tone] || looks.light;
+  return (
+    <div style={{
+      minWidth: '54px', height: '54px', padding: '0 10px', borderRadius: '14px', background: l.bg, color: l.fg,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 900, fontSize: '19px',
+      flexShrink: 0, fontVariantNumeric: 'tabular-nums',
+    }}>
+      #{number}
+      {rejoined && <span style={{ fontSize: '11px', marginLeft: '3px', opacity: 0.85 }}>R</span>}
+    </div>
+  );
+}
+
+function QueueRow({ p, index, now }) {
+  const first = index === 0;
+  const rejoined = p.checkin_status === 'rejoined';
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: '12px', padding: '11px 12px', borderRadius: '14px',
+      background: first ? '#f0f7ff' : rejoined ? '#fff8f0' : '#fafbfd',
+      border: `1.5px solid ${first ? C.blue : rejoined ? '#f0c9a0' : C.line}`,
+    }}>
+      <TokenTile number={p.token_number} tone={first ? 'navy' : 'light'} rejoined={rejoined} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <p style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: C.ink, wordBreak: 'break-word' }}>{formatNames(p.names)}</p>
+        <p style={{ margin: '2px 0 0', fontSize: '12.5px', color: C.mute }}>
+          {p.num_patients === 1 ? '1 person' : `Group of ${p.num_patients}`} · joined {formatTime(p.created_at)}
+          {rejoined && <span style={{ color: '#e67e22' }}> · back after skip</span>}
+        </p>
+        <ArrivalChip patient={p} now={now} />
+      </div>
+      {first && <Chip tone="navy">Next</Chip>}
+    </div>
+  );
+}
 
 export default function Admin() {
+  useAdminStyles();
+
   const { slug, clinic, api, socket } = useClinic();
   // Separate login per clinic, even in the same browser
   const storageKey = `cq_admin_token:${slug}`;
@@ -50,6 +235,7 @@ export default function Admin() {
   const [capacity, setCapacity] = useState(null);
   const [limitInput, setLimitInput] = useState('');
   const [limitSaving, setLimitSaving] = useState(false);
+
   // Ticks so "Coming by 5:30 PM" turns green once that time has passed
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -183,6 +369,7 @@ export default function Admin() {
       socket.off('queue-paused-updated', setIsPaused);
     };
   }, [socket]);
+
   // How many online spots are used (updates live)
   useEffect(() => {
     const load = () => {
@@ -318,435 +505,401 @@ export default function Admin() {
 
   // ── Derived state ───────────────────────────────────────────────────
   const waitingQueue = fullQueue.filter(p => p.status === 'waiting');
+  const waitingPeople = waitingQueue.reduce((sum, p) => sum + p.num_patients, 0);
   const queueEmpty = waitingQueue.length === 0 && !calledPatient;
+  const mainDisabled = loading || queueEmpty;
+  const schedule = clinic.schedule;
 
   const buttonLabel = () => {
     if (loading) return 'Please wait...';
-    if (queueEmpty) return 'Queue is Empty';
-    if (calledPatient) return 'Done & Call Next →';
-    return 'Call Next Patient →';
+    if (queueEmpty) return 'Queue is empty';
+    if (calledPatient) return 'Done & call next  →';
+    return 'Call next patient  →';
   };
 
-  const buttonBg = () => {
-    if (loading || queueEmpty) return '#eee';
-    if (calledPatient) return 'linear-gradient(135deg,#27ae60,#2ecc71)';
-    return 'linear-gradient(135deg,#1e3a5f,#2d6a9f)';
-  };
-
-  const buttonShadow = () => {
-    if (loading || queueEmpty) return 'none';
-    if (calledPatient) return '0 4px 14px rgba(39,174,96,0.35)';
-    return '0 4px 14px rgba(30,58,95,0.3)';
-  };
-
-  const S = {
-    page: { minHeight: '100vh', background: '#f0f4f8', fontFamily: "'Segoe UI',sans-serif", padding: '24px', boxSizing: 'border-box' },
-    card: { background: 'white', borderRadius: '20px', padding: '24px', boxShadow: '0 4px 20px rgba(0,0,0,0.07)', boxSizing: 'border-box' },
-    pill: { padding: '8px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: '700' },
-    // 16px text stops iPhones from zooming in when a field is tapped
-    input: { border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '12px', padding: '12px 14px', fontSize: '16px', color: '#1a1a2e', outline: 'none', boxSizing: 'border-box', minHeight: '46px', fontFamily: 'inherit' },
-  };
-
+  // ── Waiting for the saved login ─────────────────────────────────────
   if (checkingAuth) {
     return (
-      <div style={{ minHeight: '100vh', background: '#f0f4f8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Segoe UI',sans-serif" }}>
-        <p style={{ color: '#bbb' }}>Checking access...</p>
+      <div className="cqa-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <p style={{ color: C.soft }}>Checking access...</p>
       </div>
     );
   }
 
+  // ── PIN screen ──────────────────────────────────────────────────────
   if (!authed) {
     return (
-      <div style={{ minHeight: '100vh', background: '#f0f4f8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: "'Segoe UI',sans-serif", padding: '16px', boxSizing: 'border-box' }}>
-        <form onSubmit={handlePinSubmit} style={{ background: 'white', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '320px', boxShadow: '0 8px 30px rgba(0,0,0,0.1)', textAlign: 'center', boxSizing: 'border-box' }}>
-          <p style={{ fontSize: '12px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', margin: '0 0 6px' }}>STAFF ACCESS</p>
-          <p style={{ fontSize: '16px', fontWeight: '800', color: '#1e3a5f', margin: '0 0 18px' }}>{clinic.name}</p>
+      <div className="cqa-page" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <form
+          onSubmit={handlePinSubmit}
+          style={{ ...cardStyle, width: '100%', maxWidth: '340px', padding: '32px 28px', textAlign: 'center', boxShadow: '0 12px 36px rgba(30,58,95,0.12)' }}
+        >
+          <p style={{ margin: '0 0 18px', fontSize: '12px', fontWeight: 800, letterSpacing: '4px', color: '#bbb', textTransform: 'uppercase' }}>
+            Clinic<span style={{ color: C.blue }}>Q</span> · Staff
+          </p>
+          <div style={{
+            width: '58px', height: '58px', margin: '0 auto 14px', borderRadius: '16px', fontSize: '26px',
+            background: 'linear-gradient(150deg,#1e3a5f,#2d6a9f)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 8px 20px rgba(30,58,95,0.25)',
+          }}>
+            🔒
+          </div>
+          <p style={{ margin: '0 0 4px', fontSize: '18px', fontWeight: 800, color: C.navy }}>{clinic.name}</p>
+          <p style={{ margin: '0 0 20px', fontSize: '13px', color: C.mute }}>Enter the staff PIN to continue</p>
           <input
             type="password"
             inputMode="numeric"
             value={pin}
             onChange={e => setPin(e.target.value)}
-            placeholder="Enter PIN"
-            style={{ width: '100%', border: '2px solid #e8e8e8', borderRadius: '10px', padding: '12px', fontSize: '16px', textAlign: 'center', marginBottom: '12px', boxSizing: 'border-box' }}
+            placeholder="PIN"
             autoFocus
+            style={{ ...inputStyle, width: '100%', textAlign: 'center', fontSize: '20px', letterSpacing: '6px', marginBottom: '12px' }}
           />
-          {pinError && <p style={{ color: '#e74c3c', fontSize: '13px', marginBottom: '12px' }}>{pinError}</p>}
-          <button type="submit" style={{ width: '100%', background: '#1e3a5f', color: 'white', border: 'none', borderRadius: '10px', padding: '12px', fontWeight: '700', cursor: 'pointer', minHeight: '46px' }}>
-            Unlock
-          </button>
+          {pinError && <p style={{ margin: '0 0 12px', color: C.red, fontSize: '13px', lineHeight: 1.45 }}>{pinError}</p>}
+          <button type="submit" className="cqa-btn" style={{ ...btn('primary'), width: '100%' }}>Unlock</button>
         </form>
       </div>
     );
   }
 
+  const confirmed = calledPatient?.checkin_status === 'confirmed';
+
+  // ── Dashboard ───────────────────────────────────────────────────────
   return (
-    <div className="cq-admin-page" style={S.page}>
-      <div style={{ maxWidth: '1100px', margin: '0 auto' }}>
+    <div className="cqa-page">
+      <div className="cqa-wrap">
 
         {/* ── Header ── */}
-        <div className="cq-admin-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#bbb', textTransform: 'uppercase', margin: '0 0 4px' }}>
-              Clinic<span style={{ color: '#2d6a9f' }}>Q</span> · Staff
+        <header className="cqa-top">
+          <div style={{ minWidth: 0 }}>
+            <p style={{ margin: '0 0 4px', fontSize: '11px', fontWeight: 800, letterSpacing: '3px', color: '#b3bcc7', textTransform: 'uppercase' }}>
+              Clinic<span style={{ color: C.blue }}>Q</span> · Staff
             </p>
-            <h1 style={{ fontSize: '26px', fontWeight: '900', color: '#1e3a5f', margin: 0 }}>{clinic.name}</h1>
-                        {clinic.schedule?.mode === 'sessions' && clinic.schedule.sessionLabel && (
-              <p style={{ margin: '6px 0 0', fontSize: '13px', fontWeight: '700', color: '#2d6a9f' }}>
-                🕒 {clinic.schedule.sessionLabel}
-              </p>
-            )}
+            <h1 className="cqa-h1" style={{ margin: 0, fontSize: '28px', fontWeight: 900, color: C.navy, letterSpacing: '-0.3px' }}>
+              {clinic.name}
+            </h1>
+            <div className="cqa-chips">
+              {schedule?.mode === 'sessions' && schedule.sessionLabel && (
+                <Chip tone="grey">🕒 {schedule.sessionLabel}</Chip>
+              )}
+              <Chip tone="blue">{waitingQueue.length} waiting · {waitingPeople} {waitingPeople === 1 ? 'person' : 'people'}</Chip>
+              {skippedList.length > 0 && <Chip tone="red">{skippedList.length} skipped</Chip>}
+              {isPaused && <Chip tone="amber">Registrations paused</Chip>}
+            </div>
           </div>
-          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ ...S.pill, background: '#dbeafe', color: '#1e3a5f' }}>
-              {waitingQueue.length} Waiting
-            </span>
-            {skippedList.length > 0 && (
-              <span style={{ ...S.pill, background: '#ffd5d5', color: '#e74c3c' }}>
-                {skippedList.length} Skipped
-              </span>
-            )}
+
+          <div className="cqa-actions">
             <button
+              className="cqa-btn"
               onClick={handleTogglePause}
               disabled={pauseLoading}
-              style={{
-                ...S.pill,
-                background: isPaused ? '#fef3cd' : '#f0f4f8',
-                color: isPaused ? '#d68910' : '#555',
-                border: `2px solid ${isPaused ? '#f39c12' : '#e0e0e0'}`,
-                cursor: pauseLoading ? 'not-allowed' : 'pointer',
-                minHeight: '40px',
-              }}
+              style={btn(isPaused ? 'warn' : 'ghost', pauseLoading)}
             >
-              {isPaused ? '▶ Resume Registrations' : '⏸ Pause Registrations'}
+              {isPaused ? '▶ Resume' : '⏸ Pause'}
             </button>
-            <a
-              href={`/c/${slug}/display`}
-              target="_blank"
-              rel="noreferrer"
-              style={{ ...S.pill, background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', textDecoration: 'none', minHeight: '40px', boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center' }}
-            >
+            <a className="cqa-btn" href={`/c/${slug}/display`} target="_blank" rel="noreferrer" style={btn('outline')}>
               📺 Display
             </a>
-            <button
-              onClick={() => lockDashboard()}
-              style={{ ...S.pill, background: 'white', color: '#888', border: '2px solid #e0e0e0', cursor: 'pointer', minHeight: '40px' }}
-            >
+            <button className="cqa-btn" onClick={() => lockDashboard()} style={btn('ghost')}>
               🔒 Lock
             </button>
           </div>
-        </div>
+        </header>
 
+        {/* ── Notices ── */}
         {isPaused && (
-          <div style={{ background: '#fff3e0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#d68910', fontWeight: '700', fontSize: '14px', lineHeight: 1.45 }}>⏸ Online registrations are paused. Patients cannot join by themselves — you can still add walk-in patients below.</p>
-          </div>
+          <Notice tone="amber">
+            ⏸ Online registrations are paused. Patients cannot join by themselves — you can still add walk-in patients.
+          </Notice>
         )}
 
-        {!isPaused && clinic.schedule?.mode === 'sessions' && !clinic.schedule.bookingOpen && (
-          <div style={{ background: '#f0f7ff', border: '1.5px solid #cce0f5', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#2d6a9f', fontWeight: '600', fontSize: '14px', lineHeight: 1.5 }}>
-              🕒 Online booking is closed. {clinic.schedule.message} You can keep serving the queue and add walk-ins.
-            </p>
-          </div>
+        {!isPaused && schedule?.mode === 'sessions' && !schedule.bookingOpen && (
+          <Notice tone="blue">
+            🕒 Online booking is closed. {schedule.message} You can keep serving the queue and add walk-ins.
+          </Notice>
         )}
 
-        {message && (
-          <div style={{ background: '#fffbf0', border: '1.5px solid #f39c12', borderRadius: '14px', padding: '14px 18px', marginBottom: '20px' }}>
-            <p style={{ margin: 0, color: '#d68910', fontWeight: '600', fontSize: '14px', lineHeight: 1.45 }}>{message}</p>
-          </div>
-        )}
+        {message && <Notice tone="amber" onClose={() => setMessage('')}>{message}</Notice>}
 
-        <div className="cq-admin-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px', alignItems: 'start' }}>
+        <div className="cqa-main">
 
-          {/* ── Current Patient + Buttons (first, so it is at the top on phones) ── */}
-          <div style={S.card}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>
-              {calledPatient ? 'Now Serving' : 'No Patient Called'}
-            </h2>
+          {/* ════════ Left column: serve patients ════════ */}
+          <div className="cqa-col">
 
-            {calledPatient ? (
-              <div style={{ textAlign: 'center', marginBottom: '16px' }}>
-                <div style={{ fontSize: '72px', fontWeight: '900', color: '#27ae60', lineHeight: 1, marginBottom: '8px' }}>
-                  #{calledPatient.token_number}
-                  {calledPatient.checkin_status === 'rejoined' && (
-                    <span style={{ fontSize: '32px', color: '#e67e22' }}>R</span>
-                  )}
-                </div>
-                <p style={{ fontSize: '20px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px', wordBreak: 'break-word' }}>
-                  {formatNames(calledPatient.names)}
-                </p>
-                <p style={{ fontSize: '13px', color: '#bbb', margin: '0 0 12px' }}>
-                  Group of {calledPatient.num_patients}
-                </p>
-                <div style={{
-                  display: 'inline-block', padding: '8px 18px', borderRadius: '20px', marginBottom: '6px',
-                  background: calledPatient.checkin_status === 'confirmed' ? '#d5f5e3' : '#fef3cd',
-                  color: calledPatient.checkin_status === 'confirmed' ? '#27ae60' : '#d68910',
-                  fontSize: '13px', fontWeight: '700',
-                }}>
-                  {calledPatient.checkin_status === 'confirmed' ? '✓ Patient is inside' : '⏳ Waiting for patient to arrive...'}
-                </div>
-                <p style={{ fontSize: '12px', color: '#bbb', margin: '4px 0 0' }}>
-                  {calledPatient.checkin_status === 'confirmed'
-                    ? 'Click the button below when patient leaves'
-                    : "Patient will tap \"I'm Here\" when they arrive"}
-                </p>
-              </div>
-            ) : (
-              <div style={{ textAlign: 'center', padding: '24px 0', color: '#ccc', fontSize: '14px', marginBottom: '16px' }}>
-                {queueEmpty ? 'No patients in queue' : 'Press the button to call the next patient'}
-              </div>
-            )}
-
-            <button
-              onClick={handleAction}
-              disabled={loading || queueEmpty}
-              style={{
-                width: '100%', background: buttonBg(), color: loading || queueEmpty ? '#bbb' : 'white',
-                border: 'none', borderRadius: '14px', padding: '16px', fontSize: '16px', fontWeight: '800',
-                cursor: loading || queueEmpty ? 'not-allowed' : 'pointer', boxShadow: buttonShadow(),
-                transition: 'all 0.2s', letterSpacing: '0.3px', minHeight: '54px',
-              }}
+            {/* ── Now serving ── */}
+            <Card
+              className="cqa-now"
+              title="Now serving"
+              right={calledPatient && (
+                <Chip tone={confirmed ? 'green' : 'amber'}>
+                  {confirmed ? '✓ Patient is inside' : '⏳ Waiting for patient to arrive'}
+                </Chip>
+              )}
             >
-              {buttonLabel()}
-            </button>
+              {calledPatient ? (
+                <div className="cqa-serving">
+                  <div style={{
+                    minWidth: '116px', padding: '14px 18px', borderRadius: '18px', textAlign: 'center',
+                    background: 'linear-gradient(150deg,#1e3a5f,#2d6a9f)', color: 'white',
+                    boxShadow: '0 10px 24px rgba(30,58,95,0.25)', fontSize: '50px', fontWeight: 900, lineHeight: 1,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}>
+                    #{calledPatient.token_number}
+                    {calledPatient.checkin_status === 'rejoined' && (
+                      <span style={{ fontSize: '22px', marginLeft: '4px', opacity: 0.8 }}>R</span>
+                    )}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <p style={{ margin: '0 0 2px', fontSize: '22px', fontWeight: 800, color: C.ink, wordBreak: 'break-word' }}>
+                      {formatNames(calledPatient.names)}
+                    </p>
+                    <p style={{ margin: '0 0 8px', fontSize: '13.5px', color: C.mute }}>
+                      {calledPatient.num_patients === 1 ? '1 person' : `Group of ${calledPatient.num_patients}`}
+                    </p>
+                    <p style={{ margin: 0, fontSize: '12.5px', color: C.soft, lineHeight: 1.45 }}>
+                      {confirmed
+                        ? 'Tap the button below when the patient leaves.'
+                        : "The patient taps \"I'm Here\" on their phone when they arrive."}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div style={{
+                  textAlign: 'center', padding: '22px 12px', marginBottom: '16px', borderRadius: '14px',
+                  background: '#f7f9fc', border: `1.5px dashed ${C.line}`,
+                }}>
+                  <div style={{ fontSize: '30px', marginBottom: '6px', opacity: 0.45 }}>🩺</div>
+                  <p style={{ margin: 0, fontSize: '14px', color: C.mute, fontWeight: 600 }}>
+                    {queueEmpty ? 'No patients in the queue' : 'Ready for the next patient'}
+                  </p>
+                </div>
+              )}
 
-            {calledPatient && (
-              <div style={{ display: 'flex', gap: '10px', marginTop: '10px', flexWrap: 'wrap' }}>
-                {calledPatient.checkin_status !== 'confirmed' && (
+              <button
+                className="cqa-btn"
+                onClick={handleAction}
+                disabled={mainDisabled}
+                style={{
+                  ...btn(calledPatient ? 'success' : 'primary', mainDisabled),
+                  width: '100%', minHeight: '56px', fontSize: '16px', fontWeight: 800,
+                  ...(mainDisabled ? { background: '#eef1f5', color: '#aab3bf', boxShadow: 'none' } : {}),
+                }}
+              >
+                {buttonLabel()}
+              </button>
+
+              {calledPatient && (
+                <div style={{ display: 'flex', gap: '10px', marginTop: '10px', flexWrap: 'wrap' }}>
+                  {!confirmed && (
+                    <button
+                      className="cqa-btn"
+                      onClick={handleManualCheckin}
+                      disabled={loading}
+                      style={{ ...btn('okOutline', loading), flex: '1 1 160px' }}
+                    >
+                      ✓ Confirm check-in
+                    </button>
+                  )}
                   <button
-                    onClick={handleManualCheckin}
+                    className="cqa-btn"
+                    onClick={handleSkip}
                     disabled={loading}
-                    style={{ flex: '1 1 140px', background: 'white', color: '#27ae60', border: '2px solid #d5f5e3', borderRadius: '14px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', minHeight: '48px' }}
+                    style={{ ...btn('danger', loading), flex: '1 1 160px' }}
                   >
-                    Confirm Check-In Manually
+                    Skip this patient
+                  </button>
+                </div>
+              )}
+
+              {waitingQueue.length > 0 && (
+                <div style={{
+                  marginTop: '14px', padding: '10px 14px', borderRadius: '12px', background: '#f7f9fc',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px',
+                }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: C.soft, textTransform: 'uppercase', letterSpacing: '1px' }}>
+                    Next up
+                  </span>
+                  <span style={{ fontSize: '14px', fontWeight: 700, color: C.navy, textAlign: 'right' }}>
+                    #{waitingQueue[0].token_number} — {formatNames(waitingQueue[0].names)}
+                    <br />
+                    <ArrivalChip patient={waitingQueue[0]} now={now} />
+                  </span>
+                </div>
+              )}
+            </Card>
+
+            {/* ── Waiting queue ── */}
+            <Card
+              className="cqa-waiting"
+              title="Waiting queue"
+              right={<Chip tone="blue">{waitingQueue.length} {waitingQueue.length === 1 ? 'token' : 'tokens'} · {waitingPeople} {waitingPeople === 1 ? 'person' : 'people'}</Chip>}
+            >
+              {waitingQueue.length === 0 ? (
+                <p style={{ textAlign: 'center', color: '#c3cad3', padding: '22px 0 12px', margin: 0, fontSize: '14px' }}>
+                  Queue is empty
+                </p>
+              ) : (
+                <div className="cqa-scroll" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {waitingQueue.map((p, i) => <QueueRow key={p.id} p={p} index={i} now={now} />)}
+                </div>
+              )}
+            </Card>
+          </div>
+
+          {/* ════════ Right column: manage ════════ */}
+          <div className="cqa-col">
+
+            {/* ── Walk-in ── */}
+            <Card
+              className="cqa-walkin"
+              title="Add walk-in patient"
+              subtitle="For patients without a phone. Works even while registrations are paused. They go to the end of the queue."
+            >
+              <form onSubmit={handleWalkIn}>
+                <div className="cqa-walkrow">
+                  <input
+                    style={{ ...inputStyle, flex: '1 1 160px', minWidth: 0 }}
+                    value={walkName}
+                    maxLength={60}
+                    onChange={e => setWalkName(e.target.value)}
+                    placeholder="Name (optional)"
+                    autoComplete="off"
+                  />
+                  <input
+                    style={{ ...inputStyle, flex: '0 0 84px', width: '84px', textAlign: 'center', fontWeight: 700 }}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    value={walkCount}
+                    onChange={handleWalkCountChange}
+                    onFocus={e => e.target.select()}
+                    placeholder="1"
+                    aria-label="Number of people (1 to 10)"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="submit"
+                    className="cqa-btn"
+                    disabled={walkLoading}
+                    style={{ ...btn('primary', walkLoading), flex: '1 1 110px' }}
+                  >
+                    {walkLoading ? 'Adding...' : 'Add'}
+                  </button>
+                </div>
+                <p style={{ margin: '8px 0 0', fontSize: '11.5px', color: '#b5bdc8' }}>Number of people: 1 to 10</p>
+
+                {walkResult.text && (
+                  <p style={{
+                    margin: '12px 0 0', fontSize: '14px', fontWeight: 600, lineHeight: 1.45,
+                    color: walkResult.type === 'ok' ? '#00875f' : '#cc0000',
+                  }}>
+                    {walkResult.text}
+                  </p>
+                )}
+              </form>
+            </Card>
+
+            {/* ── Online token limit (only shown when the clinic uses one) ── */}
+            {capacity && capacity.limit !== null && (
+              <Card
+                className="cqa-tokens"
+                title={`Online tokens${capacity.sessionName ? ` · ${capacity.sessionName}` : ''}`}
+                right={<Chip tone={capacity.limitReached ? 'red' : 'blue'}>{capacity.onlinePeople} / {capacity.limit} people</Chip>}
+              >
+                <div style={{ height: '10px', borderRadius: '10px', background: '#eef1f5', overflow: 'hidden', marginBottom: '10px' }}>
+                  <div style={{
+                    height: '100%', borderRadius: '10px', transition: 'width 0.3s',
+                    width: `${Math.min(100, Math.round((capacity.onlinePeople / capacity.limit) * 100))}%`,
+                    background: capacity.limitReached ? C.red : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
+                  }} />
+                </div>
+
+                <p style={{ margin: '0 0 14px', fontSize: '13px', color: C.mute, lineHeight: 1.5 }}>
+                  {capacity.limitReached
+                    ? 'Online tokens are full — patients can no longer register online.'
+                    : `${capacity.spotsLeft} online spot${capacity.spotsLeft === 1 ? '' : 's'} left.`}
+                  {' '}Walk-ins don't count towards the limit.
+                </p>
+
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button className="cqa-btn" onClick={() => saveLimit(capacity.limit + 5)} disabled={limitSaving} style={btn('outline', limitSaving)}>
+                    +5
+                  </button>
+                  <button className="cqa-btn" onClick={() => saveLimit(capacity.limit + 10)} disabled={limitSaving} style={btn('outline', limitSaving)}>
+                    +10
+                  </button>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={limitInput}
+                    onChange={e => setLimitInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    aria-label="Online token limit for today"
+                    style={{ ...inputStyle, width: '84px', textAlign: 'center', fontWeight: 700, padding: '9px 10px' }}
+                  />
+                  <button className="cqa-btn" onClick={() => saveLimit(Number(limitInput))} disabled={limitSaving} style={btn('primary', limitSaving)}>
+                    {limitSaving ? 'Saving...' : 'Set limit'}
+                  </button>
+                </div>
+
+                {capacity.overridden && (
+                  <button
+                    onClick={() => saveLimit(null)}
+                    disabled={limitSaving}
+                    style={{ marginTop: '12px', background: 'none', border: 'none', color: C.mute, fontSize: '13px', fontWeight: 600, textDecoration: 'underline', cursor: 'pointer', padding: '4px 0' }}
+                  >
+                    Back to the usual limit ({capacity.defaultLimit})
                   </button>
                 )}
-                <button
-                  onClick={handleSkip}
-                  disabled={loading}
-                  style={{ flex: '1 1 140px', background: 'white', color: '#e74c3c', border: '2px solid #ffd5d5', borderRadius: '14px', padding: '12px', fontSize: '14px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', minHeight: '48px' }}
-                >
-                  Skip This Patient
-                </button>
-              </div>
+              </Card>
             )}
 
-            {waitingQueue.length > 0 && (
-              <div style={{ marginTop: '12px', background: '#f7f9fc', borderRadius: '12px', padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
-                <span style={{ fontSize: '12px', color: '#aaa' }}>Next up</span>
-                <span style={{ fontSize: '13px', fontWeight: '700', color: '#1e3a5f' }}>
-                  #{waitingQueue[0].token_number} — {formatNames(waitingQueue[0].names)}
-                  <ArrivalChip patient={waitingQueue[0]} now={now} />
-                </span>
-              </div>
+            {/* ── Skipped ── */}
+            {skippedList.length > 0 && (
+              <Card
+                className="cqa-skipped"
+                title="Skipped (no-shows)"
+                subtitle="They can rejoin from their own token page. They go to the end of the queue."
+                right={<Chip tone="red">{skippedList.length}</Chip>}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {skippedList.map(p => (
+                    <div key={p.id} style={{
+                      display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', borderRadius: '14px',
+                      background: '#fff7f7', border: '1.5px solid #ffdede',
+                    }}>
+                      <TokenTile number={p.token_number} tone="red" />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ margin: 0, fontSize: '14.5px', fontWeight: 700, color: '#555', wordBreak: 'break-word' }}>{formatNames(p.names)}</p>
+                        <p style={{ margin: '2px 0 0', fontSize: '12.5px', color: C.mute }}>
+                          {p.num_patients === 1 ? '1 person' : `Group of ${p.num_patients}`}
+                        </p>
+                      </div>
+                      <Chip tone="red">No-show</Chip>
+                    </div>
+                  ))}
+                </div>
+              </Card>
             )}
-          </div>
 
-          {/* ── Right column: Walk-in, then QR ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', minWidth: 0 }}>
-
-            {/* Walk-in */}
-            <form onSubmit={handleWalkIn} style={S.card}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>Add walk-in patient</h2>
-              <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 14px', lineHeight: 1.45 }}>
-                For patients without a phone. Works even while registrations are paused.
-              </p>
-
-              <input
-                style={{ ...S.input, width: '100%', marginBottom: '10px' }}
-                value={walkName}
-                maxLength={60}
-                onChange={e => setWalkName(e.target.value)}
-                placeholder="Name (optional)"
-                autoComplete="off"
-              />
-
-              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'stretch' }}>
-                <input
-                  style={{ ...S.input, flex: '0 0 96px', width: '96px', textAlign: 'center', fontWeight: '700' }}
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={walkCount}
-                  onChange={handleWalkCountChange}
-                  onFocus={e => e.target.select()}
-                  placeholder="1"
-                  aria-label="Number of people (1 to 10)"
-                  autoComplete="off"
+            {/* ── QR code ── */}
+            <Card className="cqa-qr" title="Scan to join the queue" style={{ textAlign: 'center' }}>
+              {qrCode ? (
+                <img
+                  src={qrCode}
+                  alt="QR code to join the queue"
+                  style={{ width: '170px', height: '170px', maxWidth: '100%', borderRadius: '12px', border: `1px solid ${C.line}` }}
                 />
-                <button
-                  type="submit"
-                  disabled={walkLoading}
-                  style={{ flex: '1 1 140px', background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '12px', fontSize: '15px', fontWeight: '700', cursor: walkLoading ? 'not-allowed' : 'pointer', opacity: walkLoading ? 0.7 : 1, minHeight: '46px' }}
-                >
-                  {walkLoading ? 'Adding...' : 'Add to queue'}
-                </button>
-              </div>
-              <p style={{ fontSize: '11px', color: '#b5bdc8', margin: '8px 0 0' }}>
-                Number of people: 1 to 10
-              </p>
-
-              {walkResult.text && (
-                <p style={{ margin: '12px 0 0', fontSize: '14px', fontWeight: '600', lineHeight: 1.45, color: walkResult.type === 'ok' ? '#00a37a' : '#cc0000' }}>
-                  {walkResult.text}
-                </p>
+              ) : (
+                <div style={{ width: '170px', height: '170px', maxWidth: '100%', background: '#f0f4f8', borderRadius: '12px', margin: '0 auto' }} />
               )}
-            </form>
-
-            {/* QR code */}
-            <div style={{ ...S.card, textAlign: 'center' }}>
-              <p style={{ fontSize: '11px', fontWeight: '800', letterSpacing: '3px', color: '#ddd', textTransform: 'uppercase', margin: '0 0 4px' }}>
-                Clinic<span style={{ color: '#2d6a9f' }}>Q</span>
-              </p>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Scan to Join Queue</h2>
-              {qrCode
-                ? <img src={qrCode} alt="QR code to join the queue" style={{ width: '180px', height: '180px', borderRadius: '12px', maxWidth: '100%' }} />
-                : <div style={{ width: '180px', height: '180px', background: '#f0f4f8', borderRadius: '12px', margin: '0 auto', maxWidth: '100%' }} />
-              }
-              <p style={{ fontSize: '12px', color: '#bbb', marginTop: '12px', marginBottom: 0 }}>
-                Display at clinic entrance
-              </p>
-            </div>
+              <p style={{ margin: '12px 0 0', fontSize: '12.5px', color: C.soft }}>Display this at the clinic entrance</p>
+            </Card>
           </div>
         </div>
-        
-        {/* ── Online token limit (only shown when the clinic uses one) ── */}
-        {capacity && capacity.limit !== null && (
-          <div style={{ ...S.card, marginBottom: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
-              <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: 0 }}>
-                Online tokens{capacity.sessionName ? ` · ${capacity.sessionName}` : ''}
-              </h2>
-              <span style={{ ...S.pill, background: capacity.limitReached ? '#ffd5d5' : '#dbeafe', color: capacity.limitReached ? '#e74c3c' : '#1e3a5f' }}>
-                {capacity.onlinePeople} / {capacity.limit} people
-              </span>
-            </div>
 
-            <div style={{ height: '10px', borderRadius: '10px', background: '#eef1f5', overflow: 'hidden', marginBottom: '10px' }}>
-              <div style={{
-                height: '100%', borderRadius: '10px', transition: 'width 0.3s',
-                width: `${Math.min(100, Math.round((capacity.onlinePeople / capacity.limit) * 100))}%`,
-                background: capacity.limitReached ? '#e74c3c' : 'linear-gradient(135deg,#1e3a5f,#2d6a9f)',
-              }} />
-            </div>
-
-            <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#8a94a3', lineHeight: 1.5 }}>
-              {capacity.limitReached
-                ? 'Online tokens are full — patients can no longer register online.'
-                : `${capacity.spotsLeft} online spot${capacity.spotsLeft === 1 ? '' : 's'} left.`}
-              {' '}Walk-ins you add don't count towards the limit.
-            </p>
-
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <button
-                onClick={() => saveLimit(capacity.limit + 5)}
-                disabled={limitSaving}
-                style={{ background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '10px 14px', fontSize: '14px', fontWeight: '700', cursor: limitSaving ? 'not-allowed' : 'pointer', minHeight: '44px' }}
-              >
-                +5 people
-              </button>
-              <button
-                onClick={() => saveLimit(capacity.limit + 10)}
-                disabled={limitSaving}
-                style={{ background: 'white', color: '#2d6a9f', border: '2px solid #dbeafe', borderRadius: '12px', padding: '10px 14px', fontSize: '14px', fontWeight: '700', cursor: limitSaving ? 'not-allowed' : 'pointer', minHeight: '44px' }}
-              >
-                +10 people
-              </button>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={limitInput}
-                onChange={e => setLimitInput(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                aria-label="Online token limit for today"
-                style={{ width: '90px', border: '2px solid #eef1f5', background: '#fbfcfe', borderRadius: '12px', padding: '10px 12px', fontSize: '16px', fontWeight: '700', textAlign: 'center', outline: 'none', boxSizing: 'border-box', minHeight: '44px' }}
-              />
-              <button
-                onClick={() => saveLimit(Number(limitInput))}
-                disabled={limitSaving}
-                style={{ background: 'linear-gradient(135deg,#1e3a5f,#2d6a9f)', color: 'white', border: 'none', borderRadius: '12px', padding: '10px 16px', fontSize: '14px', fontWeight: '700', cursor: limitSaving ? 'not-allowed' : 'pointer', minHeight: '44px' }}
-              >
-                {limitSaving ? 'Saving...' : 'Set limit'}
-              </button>
-            </div>
-
-            {capacity.overridden && (
-              <button
-                onClick={() => saveLimit(null)}
-                disabled={limitSaving}
-                style={{ marginTop: '12px', background: 'none', border: 'none', color: '#8a94a3', fontSize: '13px', fontWeight: '600', textDecoration: 'underline', cursor: 'pointer', padding: '4px 0' }}
-              >
-                Back to the usual limit ({capacity.defaultLimit})
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* ── Waiting Queue ── */}
-        <div style={{ ...S.card, marginBottom: '20px' }}>
-          <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 16px' }}>Waiting Queue</h2>
-          {waitingQueue.length === 0 ? (
-            <p style={{ textAlign: 'center', color: '#ccc', padding: '24px 0', fontSize: '14px' }}>Queue is empty</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {waitingQueue.map((p, i) => (
-                <div key={p.id} style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  padding: '14px 18px', borderRadius: '14px', flexWrap: 'wrap', gap: '10px',
-                  background: i === 0 ? '#f0f7ff' : p.checkin_status === 'rejoined' ? '#fff8f0' : '#f9f9f9',
-                  border: `2px solid ${i === 0 ? '#2d6a9f' : p.checkin_status === 'rejoined' ? '#e67e22' : '#efefef'}`,
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
-                    <span style={{ fontFamily: 'monospace', fontSize: '22px', fontWeight: '900', color: i === 0 ? '#1e3a5f' : '#ccc' }}>
-                      #{p.token_number}
-                      {p.checkin_status === 'rejoined' && <span style={{ color: '#e67e22', fontSize: '14px' }}>R</span>}
-                    </span>
-                    <div style={{ minWidth: 0 }}>
-                      <p style={{ margin: '0 0 2px', fontWeight: '600', color: '#333', fontSize: '15px', wordBreak: 'break-word' }}>{formatNames(p.names)}</p>
-                      <p style={{ margin: 0, fontSize: '12px', color: '#bbb' }}>
-                        Group of {p.num_patients} · {new Date(p.created_at).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true })}
-                        {p.checkin_status === 'rejoined' && <span style={{ color: '#e67e22', marginLeft: '6px' }}>· Back after skip</span>}
-                      </p>
-                      <ArrivalChip patient={p} now={now} />
-                    </div>
-                  </div>
-                  {i === 0 && (
-                    <span style={{ background: '#1e3a5f', color: 'white', fontSize: '12px', fontWeight: '700', padding: '6px 14px', borderRadius: '20px' }}>Next</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* ── Skipped (information only) ── */}
-        {skippedList.length > 0 && (
-          <div style={S.card}>
-            <h2 style={{ fontSize: '16px', fontWeight: '700', color: '#1e3a5f', margin: '0 0 4px' }}>Skipped (No-shows)</h2>
-            <p style={{ fontSize: '12px', color: '#a8b1bd', margin: '0 0 16px', lineHeight: 1.45 }}>
-              Skipped patients can rejoin from their own token page. They go to the end of the queue.
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {skippedList.map(p => (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', padding: '14px 18px', borderRadius: '14px', background: '#fff5f5', border: '1.5px solid #ffd5d5' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px', minWidth: 0 }}>
-                    <span style={{ fontFamily: 'monospace', fontSize: '20px', fontWeight: '900', color: '#e74c3c' }}>#{p.token_number}</span>
-                    <div style={{ minWidth: 0 }}>
-                      <p style={{ margin: '0 0 2px', fontWeight: '600', color: '#555', fontSize: '14px', wordBreak: 'break-word' }}>{formatNames(p.names)}</p>
-                      <p style={{ margin: 0, fontSize: '12px', color: '#bbb' }}>Group of {p.num_patients}</p>
-                    </div>
-                  </div>
-                  <span style={{ background: '#ffd5d5', color: '#e74c3c', fontSize: '12px', fontWeight: '700', padding: '6px 14px', borderRadius: '20px' }}>No-show</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <p style={{ textAlign: 'center', fontSize: '11px', color: '#ccc', marginTop: '32px', letterSpacing: '3px', fontWeight: '700' }}>
-          CLINIC<span style={{ color: '#2d6a9f' }}>Q</span>
+        <p style={{ textAlign: 'center', fontSize: '11px', color: '#c3cad3', marginTop: '28px', letterSpacing: '3px', fontWeight: 700 }}>
+          CLINIC<span style={{ color: C.blue }}>Q</span>
         </p>
-
       </div>
     </div>
   );
